@@ -1,0 +1,18 @@
+[INFO] Scanning for projects...
+[INFO] -----------------------< com.mini:mini >-----------------------
+[INFO] Building mini 1.0
+[INFO] -------------------------------------------------------------
+[INFO] --- maven-compiler-plugin:3.11.0:testCompile (default-testCompile) @ mini ---
+[INFO] -------------------------------------------------------------
+[ERROR] COMPILATION ERROR :
+[INFO] -------------------------------------------------------------
+[ERROR] /tmp/mini/src/test/java/com/mini/FooTestGeneratedTest.java:[7,44] cannot find symbol
+[ERROR]   symbol:   variable store
+[ERROR]   location: class com.mini.FooTestGeneratedTest
+[INFO] 1 error
+[INFO] -------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] -------------------------------------------------------------
+[INFO] Total time:  01.234 s
+[INFO] Finished at: 2026-09-14T12:00:00Z
+[INFO] -------------------------------------------------------------

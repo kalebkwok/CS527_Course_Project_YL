@@ -1,0 +1,9 @@
+{"id": 1, "timestamp": "2026-09-14T12:00:00Z", "action": "message", "llm_metrics": {"prompt_tokens": 900, "completion_tokens": 60, "latency_ms": 700}}
+{"id": 2, "timestamp": "2026-09-14T12:00:03Z", "action": "grep", "args": {"path": "src/main/java/com/mini"}, "matched_files": ["src/main/java/com/mini/Foo.java", "src/main/java/com/mini/Bar.java"]}
+{"id": 3, "timestamp": "2026-09-14T12:00:06Z", "action": "read", "args": {"path": "src/main/java/com/mini/Foo.java"}, "observation": {"content": "package com.mini;"}}
+{"id": 4, "timestamp": "2026-09-14T12:00:09Z", "action": "list", "args": {"path": "src/test/java/com/mini"}, "observation": {"content": ""}}
+{"id": 5, "timestamp": "2026-09-14T12:00:12Z", "action": "read", "args": {"path": "src/test/java/com/mini/FooTest.java"}, "observation": {"content": "package com.mini;"}}
+{"id": 6, "timestamp": "2026-09-14T12:00:20Z", "action": "message", "llm_metrics": {"prompt_tokens": 1400, "completion_tokens": 120, "latency_ms": 900}}
+{"id": 7, "timestamp": "2026-09-14T12:00:26Z", "action": "write", "args": {"path": "src/test/java/com/mini/FooGeneratedTest.java", "content": "package com.mini;\n\nclass FooGeneratedTest {\n}\n"}}
+{"id": 8, "timestamp": "2026-09-14T12:00:40Z", "action": "message", "llm_metrics": {"prompt_tokens": 1500, "completion_tokens": 80, "latency_ms": 1100}}
+{"id": 9, "timestamp": "2026-09-14T12:00:44Z", "action": "read", "args": {"path": "src/main/java/com/mini/Foo.java"}, "observation": {"content": "package com.mini;"}}

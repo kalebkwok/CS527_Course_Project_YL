@@ -1,0 +1,257 @@
+{
+  "project": {
+    "name": "mini",
+    "commit": "abc1234",
+    "build_tool": "maven",
+    "java_version": "17",
+    "src_roots": ["src/main/java"],
+    "test_roots": ["src/test/java"],
+    "n_source_files": 7,
+    "n_test_files": 4,
+    "test_framework": "junit5",
+    "assertion_lib": "junit",
+    "mocking_lib": "mockito"
+  },
+  "types": {
+    "com.mini.Foo": {
+      "kind": "class",
+      "file": "src/main/java/com/mini/Foo.java",
+      "package": "com.mini",
+      "line": 5,
+      "supertypes": [],
+      "type_params": [],
+      "ctors": [
+        {"name": "<init>", "params": [], "returns": "void", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/mini/Foo.java", "line": 8, "line_end": 9,
+         "body_reads_fields": [], "body_writes_fields": []}
+      ],
+      "factories": [],
+      "builders": [],
+      "singletons": [],
+      "observables": [
+        {"name": "size", "params": [], "returns": "int", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/mini/Foo.java", "line": 19, "line_end": 21,
+         "body_reads_fields": ["store"], "body_writes_fields": []}
+      ],
+      "methods": [
+        {"name": "process", "params": [{"name": "bar", "type": "com.mini.Bar", "resolved": true},
+                                       {"name": "n", "type": "int", "resolved": true}],
+         "returns": "int", "throws": ["java.io.IOException"], "static": false, "visibility": "public",
+         "file": "src/main/java/com/mini/Foo.java", "line": 11, "line_end": 17,
+         "body_reads_fields": ["store"], "body_writes_fields": []},
+        {"name": "size", "params": [], "returns": "int", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/mini/Foo.java", "line": 19, "line_end": 21,
+         "body_reads_fields": ["store"], "body_writes_fields": []}
+      ],
+      "fields": [
+        {"name": "store", "type": "com.mini.Store", "static": false, "visibility": "private",
+         "file": "src/main/java/com/mini/Foo.java", "line": 6, "initializer": "new Store()"}
+      ]
+    },
+    "com.mini.Bar": {
+      "kind": "class",
+      "file": "src/main/java/com/mini/Bar.java",
+      "package": "com.mini",
+      "line": 3,
+      "supertypes": [],
+      "type_params": [],
+      "ctors": [
+        {"name": "<init>", "params": [{"name": "value", "type": "java.lang.String", "resolved": true}],
+         "returns": "void", "throws": [], "static": false, "visibility": "private",
+         "file": "src/main/java/com/mini/Bar.java", "line": 6, "line_end": 8,
+         "body_reads_fields": [], "body_writes_fields": ["value"]}
+      ],
+      "factories": [
+        {"name": "of", "params": [{"name": "value", "type": "java.lang.String", "resolved": true}],
+         "returns": "com.mini.Bar", "throws": [], "static": true, "visibility": "public",
+         "file": "src/main/java/com/mini/Bar.java", "line": 10, "line_end": 12,
+         "body_reads_fields": [], "body_writes_fields": []}
+      ],
+      "builders": [],
+      "singletons": [],
+      "observables": [
+        {"name": "getValue", "params": [], "returns": "java.lang.String", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/mini/Bar.java", "line": 14, "line_end": 16,
+         "body_reads_fields": ["value"], "body_writes_fields": []}
+      ],
+      "methods": [],
+      "fields": [
+        {"name": "value", "type": "java.lang.String", "static": false, "visibility": "private",
+         "file": "src/main/java/com/mini/Bar.java", "line": 4, "initializer": null}
+      ]
+    },
+    "com.mini.Store": {
+      "kind": "class",
+      "file": "src/main/java/com/mini/Store.java",
+      "package": "com.mini",
+      "line": 6,
+      "supertypes": [],
+      "type_params": [],
+      "ctors": [
+        {"name": "<init>", "params": [], "returns": "void", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/mini/Store.java", "line": 9, "line_end": 10,
+         "body_reads_fields": [], "body_writes_fields": []}
+      ],
+      "factories": [],
+      "builders": [],
+      "singletons": [],
+      "observables": [
+        {"name": "size", "params": [], "returns": "int", "throws": [], "static": false, "visibility": "public",
+         "file": "src/main/java/com/mini/Store.java", "line": 16, "line_end": 18,
+         "body_reads_fields": ["values"], "body_writes_fields": []}
+      ],
+      "methods": [
+        {"name": "put", "params": [{"name": "key", "type": "java.lang.String", "resolved": true},
+                                   {"name": "value", "type": "int", "resolved": true}],
+         "returns": "void", "throws": [], "static": false, "visibility": "public",
+         "file": "src/main/java/com/mini/Store.java", "line": 12, "line_end": 14,
+         "body_reads_fields": ["values"], "body_writes_fields": ["values"]}
+      ],
+      "fields": [
+        {"name": "values", "type": "java.util.Map", "static": false, "visibility": "private",
+         "file": "src/main/java/com/mini/Store.java", "line": 7, "initializer": "new LinkedHashMap<>()"}
+      ]
+    },
+    "com.mini.Token": {
+      "kind": "class",
+      "file": "src/main/java/com/mini/Token.java",
+      "package": "com.mini",
+      "line": 3,
+      "supertypes": [],
+      "type_params": [],
+      "ctors": [
+        {"name": "<init>", "params": [], "returns": "void", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/mini/Token.java", "line": 4, "line_end": 5,
+         "body_reads_fields": [], "body_writes_fields": []}
+      ],
+      "factories": [],
+      "builders": [],
+      "singletons": [],
+      "observables": [],
+      "methods": [],
+      "fields": []
+    },
+    "com.other.Token": {
+      "kind": "class",
+      "file": "src/main/java/com/other/Token.java",
+      "package": "com.other",
+      "line": 3,
+      "supertypes": [],
+      "type_params": [],
+      "ctors": [
+        {"name": "<init>", "params": [], "returns": "void", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/other/Token.java", "line": 4, "line_end": 5,
+         "body_reads_fields": [], "body_writes_fields": []}
+      ],
+      "factories": [],
+      "builders": [],
+      "singletons": [],
+      "observables": [],
+      "methods": [],
+      "fields": []
+    },
+    "com.mini.Wheel": {
+      "kind": "interface",
+      "file": "src/main/java/com/mini/Wheel.java",
+      "package": "com.mini",
+      "line": 3,
+      "supertypes": [],
+      "type_params": [],
+      "ctors": [],
+      "factories": [],
+      "builders": [],
+      "singletons": [],
+      "observables": [],
+      "methods": [
+        {"name": "spin", "params": [], "returns": "void", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/mini/Wheel.java", "line": 4, "line_end": 4,
+         "body_reads_fields": [], "body_writes_fields": []}
+      ],
+      "fields": []
+    },
+    "com.mini.WheelImpl": {
+      "kind": "class",
+      "file": "src/main/java/com/mini/WheelImpl.java",
+      "package": "com.mini",
+      "line": 3,
+      "supertypes": ["com.mini.Wheel"],
+      "type_params": [],
+      "ctors": [
+        {"name": "<init>", "params": [{"name": "delegate", "type": "com.mini.Wheel", "resolved": true}],
+         "returns": "void", "throws": [], "static": false, "visibility": "public",
+         "file": "src/main/java/com/mini/WheelImpl.java", "line": 6, "line_end": 8,
+         "body_reads_fields": [], "body_writes_fields": ["delegate"]}
+      ],
+      "factories": [],
+      "builders": [],
+      "singletons": [],
+      "observables": [],
+      "methods": [
+        {"name": "spin", "params": [], "returns": "void", "throws": [], "static": false,
+         "visibility": "public", "file": "src/main/java/com/mini/WheelImpl.java", "line": 11, "line_end": 13,
+         "body_reads_fields": ["delegate"], "body_writes_fields": []}
+      ],
+      "fields": [
+        {"name": "delegate", "type": "com.mini.Wheel", "static": false, "visibility": "private",
+         "file": "src/main/java/com/mini/WheelImpl.java", "line": 4, "initializer": null}
+      ]
+    }
+  },
+  "tests": [
+    {
+      "id": "com.mini.FooTest#testProcessRoundTrips",
+      "file": "src/test/java/com/mini/FooTest.java",
+      "class": "com.mini.FooTest",
+      "method": "testProcessRoundTrips",
+      "line_start": 12,
+      "line_end": 20,
+      "framework": "junit5",
+      "assertion_lib": "junit",
+      "mocking": "mockito",
+      "fixtures": [
+        {"name": "store", "type": "com.mini.Store", "static": false, "visibility": "private",
+         "file": "src/test/java/com/mini/FooTest.java", "line": 8, "initializer": "new Store()"}
+      ],
+      "callees": ["com.mini.Foo#process(com.mini.Bar,int)"],
+      "helpers": [],
+      "source": "@Test\nvoid testProcessRoundTrips() throws Exception {\n    Foo foo = new Foo();\n    Bar bar = Bar.of(\"a\");\n    assertEquals(1, foo.process(bar, 1));\n}"
+    },
+    {
+      "id": "com.mini.BarTest#testOfParsesValue",
+      "file": "src/test/java/com/mini/BarTest.java",
+      "class": "com.mini.BarTest",
+      "method": "testOfParsesValue",
+      "line_start": 8,
+      "line_end": 13,
+      "framework": "junit5",
+      "assertion_lib": "junit",
+      "mocking": "none",
+      "fixtures": [],
+      "callees": ["com.mini.Bar#of(java.lang.String)"],
+      "helpers": [],
+      "source": "@Test\nvoid testOfParsesValue() {\n    Bar bar = Bar.of(\"a\");\n    assertEquals(\"a\", bar.getValue());\n}"
+    },
+    {
+      "id": "com.mini.WheelImplTest#testSpinDelegates",
+      "file": "src/test/java/com/mini/WheelImplTest.java",
+      "class": "com.mini.WheelImplTest",
+      "method": "testSpinDelegates",
+      "line_start": 9,
+      "line_end": 15,
+      "framework": "junit5",
+      "assertion_lib": "junit",
+      "mocking": "mockito",
+      "fixtures": [],
+      "callees": ["com.mini.WheelImpl#spin()"],
+      "helpers": [],
+      "source": "@Test\nvoid testSpinDelegates() {\n    Wheel delegate = mock(Wheel.class);\n    new WheelImpl(delegate).spin();\n    verify(delegate).spin();\n}"
+    }
+  ],
+  "test_helpers": {
+    "com.mini.TestUtil": [
+      {"name": "emptyStore", "params": [], "returns": "com.mini.Store", "throws": [], "static": true,
+       "visibility": "package", "file": "src/test/java/com/mini/TestUtil.java", "line": 5, "line_end": 7,
+       "body_reads_fields": [], "body_writes_fields": []}
+    ]
+  }
+}
