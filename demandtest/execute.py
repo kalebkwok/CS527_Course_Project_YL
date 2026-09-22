@@ -1,4 +1,7 @@
-"""S4 pass 5–6 — write, compile and run one test class (SPEC §2.8.5–2.8.6)."""
+"""S4 pass 5–6 — write, compile and run one test class (SPEC §2.8.5–2.8.6), plus the static
+`target_hit` check of §2.8.5 (0.2.2): does the final source call the focal method and show
+oracle evidence for every oracle need? A passing test that does neither is not a success
+(TestTailor's coverage-accuracy analog, Zhou et al. FSE 2026)."""
 from __future__ import annotations
 
 import os
@@ -10,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from .demand import Task
+from .proximal import ORACLE_EVIDENCE
 
 DEFAULT_TEST_ROOT = "src/test/java"
 DEFAULT_TIMEOUT_S = 900
@@ -44,6 +48,19 @@ def count_asserts(src: str) -> int:
         r"IterableEquals|Between|All|InstanceOf|DoesNotThrow)\s*\(", src))
     n += len(re.findall(r"(?m)^\s*assert\s", src))  # the java `assert` keyword
     return n
+
+
+def target_hit(src: str, task: Task, demands) -> int:
+    """1 iff `src` calls the focal method and every oracle need has evidence (§2.8.5). Static, no execution."""
+    name = re.escape(task.focal_method)
+    if not (re.search(rf"\.{name}\s*\(", src) or re.search(rf"::\s*{name}\b", src)
+            or (task.focal_method == "<init>")):
+        return 0
+    oracles = [n for n in demands if n.kind == "oracle"]
+    if not oracles:
+        return int(count_asserts(src) > 0)
+    return int(all(ORACLE_EVIDENCE.get(n.detail) is not None and ORACLE_EVIDENCE[n.detail].search(src)
+                   for n in oracles))
 
 
 def write_test(repo: str, task: Task, src: str, test_root: str = DEFAULT_TEST_ROOT) -> Path:

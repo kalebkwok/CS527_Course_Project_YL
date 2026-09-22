@@ -5,6 +5,10 @@ Spec conflict resolved in favor of the §12 acceptance test: PROJECT FACTS
 while §2.6's prose says "sections 1–3 and 6 are never dropped". Sections 1–3
 plus 5 are protected; droppable sections truncate from the tail in order 7, 6, 4.
 Flagged to the owner as a spec inconsistency.
+
+0.2.2 (after TestTailor, Zhou et al. FSE 2026): oracle lines of section 3 carry a
+trigger hint (trigger.py); section 6 shows the top demand-proximal test and
+section 7 heads every related test with its demand diff (proximal.py).
 """
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from . import proximal, trigger
 from .demand import Task  # noqa: F401  (re-exported type for callers)
 from .index import Index, erase, simple
 
@@ -74,7 +79,7 @@ def extract_method_source(src: str, method_name: str) -> str:
     return ""
 
 
-def _focal_section(task: Task, focal_source: Optional[str], index: Index) -> str:
+def _focal_section(task: Task, focal_source: Optional[str], index: Index, method_src: str) -> str:
     lines = [f"// {task.focal_file}"]
     decl = None
     if focal_source:
@@ -84,7 +89,6 @@ def _focal_section(task: Task, focal_source: Optional[str], index: Index) -> str
             if re.search(r"\b(class|interface|enum)\s+\w+", ln) and "=" not in ln:
                 decl = ln.strip()
                 break
-        method_src = extract_method_source(focal_source, task.focal_method)
         if decl:
             lines.append(decl)
         if method_src:
@@ -107,7 +111,7 @@ def _idiom_line(proj: dict) -> str:
     return f"JUnit framework: {fw}; assertions: {al}; mocking: {ml}"
 
 
-def _recipe_section(index: Index, task: Task, demands, expansion) -> str:
+def _recipe_section(index: Index, task: Task, demands, expansion, method_src: str = "") -> str:
     lines: list[str] = []
     unresolved_keys = {n.key() for n in expansion.unresolved}
     for n in demands:
@@ -119,7 +123,11 @@ def _recipe_section(index: Index, task: Task, demands, expansion) -> str:
             lines.append(f"- idiom: {_idiom_line(proj)}")
             continue
         if n.kind == "oracle":
-            lines.append(f"- {role} ({tau}): {_oracle_hint(n.detail)}")
+            line = f"- {role} ({tau}): {_oracle_hint(n.detail)}"
+            hints = trigger.oracle_triggers(method_src, n.detail, n.type) if method_src else []
+            if hints:
+                line += "  // " + "; ".join(hints)
+            lines.append(line)
             continue
         if r is None:
             if n.key() in unresolved_keys:
@@ -143,22 +151,11 @@ def _recipe_section(index: Index, task: Task, demands, expansion) -> str:
 
 
 def _oracle_hint(detail: str) -> str:
-    return {
-        "exception": "assert that the documented exception is thrown",
-        "return": "assert the returned value",
-        "state": "assert the resulting observable state",
-        "interaction": "verify the interaction through the mocking library",
-    }.get(detail, "assert the documented behaviour")
+    return proximal.oracle_hint(detail)
 
 
 def _role(n) -> str:
-    if n.kind == "arg":
-        return f"arg{n.detail}"
-    if n.kind == "setup":
-        return f"setup {n.detail}"
-    if n.kind == "oracle":
-        return f"oracle/{n.detail}"
-    return n.kind
+    return proximal.role(n)
 
 
 def _observable_section(index: Index, demands, expansion) -> str:
@@ -190,28 +187,27 @@ def _obs_of(m: Method, tau: str) -> bool:
     return erase(m.owner or "") == tau
 
 
-def _assertion_style(index: Index, task: Task) -> str:
-    try:
-        from .demand import find_focal
-        C, m = find_focal(index, task)
-        sig = f"{C.fqn}#{m.erased_sig()}"
-        picks = index.tests_calling(sig)[:1] or index.tests_of_class(C.fqn)[:1]
-    except KeyError:
-        picks = []
-    # §9 leakage control: the excluded reference test must not become the idiom example.
-    visible = [t for t in index.tests if t.id not in index.excluded]
-    pick = picks[0] if picks else (visible[0] if visible else None)
+def _assertion_style(index: Index, task: Task, demands) -> str:
+    """§2.6 item 6: the top demand-proximal test (§2.5.1), else any visible test. Honors §9 exclusion."""
+    ranked = proximal.rank(index, task, demands, k=1)
+    pick = ranked[0].test if ranked else None
+    if pick is None:
+        visible = [t for t in index.tests if t.id not in index.excluded and t.source]
+        pick = visible[0] if visible else None
     if pick is None or not pick.source:
         return ""
     body = "\n".join(pick.source.splitlines()[:25])
     return f"{pick.id} ({pick.file})\n{body}"
 
 
-def _related_section(referable_tests) -> str:
+def _related_section(index: Index, task: Task, demands, expansion) -> str:
+    """§2.6 item 7: each related test headed by its demand diff (what it already satisfies, what is missing)."""
+    diffs = getattr(expansion, "referable_diffs", {}) or {}
     blocks = []
-    for t in referable_tests:
+    for t in expansion.referable_tests:
+        d = diffs.get(t.id) or proximal.diff(index, task, demands, t)
         body = "\n".join(t.source.splitlines()[:40])
-        blocks.append(f"--- {t.id} ({t.file}) ---\n{body}")
+        blocks.append(f"--- {t.id} ({t.file}) ---\n// {proximal.render_diff(d)}\n{body}")
     return "\n\n".join(blocks)
 
 
@@ -222,14 +218,15 @@ def render(index: Index, task: Task, demands, expansion, focal_source: Optional[
         pkg = simple_pkg(task.focal_class)
     except Exception:
         pkg = ""
+    method_src = extract_method_source(focal_source, task.focal_method) if focal_source else ""
     sections = {
         SECTION_KEYS[0]: (
             f"OBJECTIVE: {(task.intention or {}).get('objective', '')}\n"
             f"PRECONDITIONS: {(task.intention or {}).get('preconditions', '')}\n"
             f"EXPECTED RESULTS: {(task.intention or {}).get('expected_results', '')}"
         ),
-        SECTION_KEYS[1]: _focal_section(task, focal_source, index),
-        SECTION_KEYS[2]: _recipe_section(index, task, demands, expansion),
+        SECTION_KEYS[1]: _focal_section(task, focal_source, index, method_src),
+        SECTION_KEYS[2]: _recipe_section(index, task, demands, expansion, method_src),
         SECTION_KEYS[3]: _observable_section(index, demands, expansion),
         SECTION_KEYS[4]: (
             f"test framework: {proj.get('test_framework', '?')}\n"
@@ -238,10 +235,10 @@ def render(index: Index, task: Task, demands, expansion, focal_source: Optional[
             f"package of focal class: {pkg}\n"
             f"test root: {', '.join(proj.get('test_roots', [])) or 'src/test/java'}"
         ),
-        SECTION_KEYS[5]: _assertion_style(index, task),
+        SECTION_KEYS[5]: _assertion_style(index, task, demands),
     }
     if expansion.status == "fallback":
-        sections[SECTION_KEYS[6]] = _related_section(expansion.referable_tests)
+        sections[SECTION_KEYS[6]] = _related_section(index, task, demands, expansion)
 
     kept = dict(sections)
     droppable = [k for k in SECTION_KEYS if k not in NEVER_DROP][::-1]  # drop from the tail: 7, 6, 4

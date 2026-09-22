@@ -31,6 +31,16 @@ Still to build: `scripts/make_intentions.py` (task construction, §9), the OpenH
 (the trajectory parser exists, the headless launcher does not), and the evaluation harness
 (PIT mutation, LLM-judge alignment, amortized S0 cost reporting).
 
+**0.2.2 (2026-09-22), after TestTailor (Zhou et al., FSE 2026).** Their ablation says the closest
+existing test plus the point where it diverges is the dominant lever, so: the fallback and the
+idiom example now pick existing tests by *demand overlap* (`proximal.py`, SPEC §2.5.1) instead of
+"first test calling `m`", and every related test is headed by its *demand diff* (what it already
+obtains, what it does not assert). Oracle lines carry a syntactic *trigger hint* (`trigger.py`:
+"triggered when: n < 0"). A static `target_hit` (calls `m` and shows every oracle) is stored per
+run so the report separates *passes* from *passes and checks the intention*; `report` also prints
+usable tests per LLM call and a budget curve. `--repeat K` supports the variance protocol and
+`--refine 2` the repair-cap pilot (SPEC §11). Still 0 LLM calls before S3; Σ and the prompts are unchanged.
+
 **S0 indexer implemented (2026-09-14).** `indexer/` (Java 17, JavaParser 3.26.4 symbol solver,
 Gson streaming writer) builds `indexer/target/indexer.jar` and `index.json` per §4. The §12
 acceptance test is green on the 3-file sample project, and `indexer/verify_sample.sh`

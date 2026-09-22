@@ -49,6 +49,26 @@ class PacketTest(unittest.TestCase):
         self.assertIn("com.mini.FooTest#testProcessRoundTrips", pkt.text)
         self.assertIn("UNRESOLVED", pkt.text)
 
+    def test_related_tests_are_headed_by_their_demand_diff(self):
+        fallback = expand.expand(self.index, self.demands, self.task, budget_files=1)
+        pkt = packet.render(self.index, self.task, self.demands, fallback, focal_source=focal_source())
+        related = pkt.sections[packet.SECTION_KEYS[6]]
+        self.assertIn("// satisfies: receiver (Foo), arg0 (Bar), setup store (Store) | missing: "
+                      "oracle/exception (IOException): assert that the documented exception is thrown", related)
+        self.assertIn("// satisfies: arg0 (Bar) | missing: receiver (Foo)", related)
+
+    def test_oracle_lines_carry_trigger_hints(self):
+        recipes = self.pkt.sections[packet.SECTION_KEYS[2]]
+        self.assertIn("- oracle/exception (IOException): assert that the documented exception is thrown"
+                      "  // triggered when: n < 0", recipes)
+        self.assertNotIn("triggered when", self.pkt.sections[packet.SECTION_KEYS[1]])  # focal source untouched
+        without_source = packet.render(self.index, self.task, self.demands, self.sufficient)
+        self.assertNotIn("triggered when", without_source.text)  # no focal source, no hint
+
+    def test_assertion_style_is_the_top_demand_proximal_test(self):
+        style = self.pkt.sections[packet.SECTION_KEYS[5]]
+        self.assertTrue(style.startswith("com.mini.FooTest#testProcessRoundTrips"))
+
     def test_reference_test_never_leaks_into_the_packet(self):
         with self.index.excluded_scope({REF_TEST_ID}):
             demands = demand.compute_demands(self.index, self.task)

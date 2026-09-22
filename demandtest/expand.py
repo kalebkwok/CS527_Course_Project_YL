@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from . import packet as packet_mod
+from . import proximal
 from .demand import Need, find_focal
 from .index import Index, erase, is_jdk, is_literal, simple
 
@@ -94,6 +95,7 @@ class ExpansionResult:
     unresolved: list
     trace: list
     referable_tests: list
+    referable_diffs: dict = field(default_factory=dict)  # test id -> proximal.DemandDiff (§2.5.1)
 
 
 class Resolver:
@@ -341,10 +343,13 @@ def expand(index: Index, demands: list[Need], task, budget_files: int = DEFAULT_
     ok, unresolved_final = sufficient(index, demands, ctx)
     status = "sufficient" if ok and not unresolvable else "fallback"
     referable: list = []
-    if status == "fallback":  # IntentionTest-style backstop (§2.5)
-        sig = f"{C.fqn}#{m.erased_sig()}"
-        referable = index.tests_calling(sig)[:2] or index.tests_of_class(C.fqn)[:2]
+    diffs: dict = {}
+    if status == "fallback":  # demand-proximal backstop (§2.5.1): ranked by overlap with D, not by "calls m"
+        ranked = proximal.rank(index, task, demands, k=2)
+        referable = [d.test for d in ranked]
+        diffs = {d.test.id: d for d in ranked}
         for t in referable:
             if t.file:
                 ctx.files.add(t.file)
-    return ExpansionResult(ctx=ctx, status=status, unresolved=unresolved_final, trace=trace, referable_tests=referable)
+    return ExpansionResult(ctx=ctx, status=status, unresolved=unresolved_final, trace=trace,
+                           referable_tests=referable, referable_diffs=diffs)

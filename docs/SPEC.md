@@ -1,6 +1,6 @@
 # DemandTest — Design and Implementation Specification
 
-Version 0.2.1 (2026-09-14). Status: S0–S5 implemented against this spec (§12 indexer row green
+Version 0.2.2 (2026-09-22; 0.2.1 was 2026-09-14). Status: S0–S5 implemented against this spec (§12 indexer row green
 on the 3-file sample; first real index: cron-utils `bac6e86`); baselines/eval pending. Owner: Kaleb Guo.
 Audience: whoever (human or model) implements the code. Nothing in this repo
 is implemented yet; this document is the contract. Sections marked **MUST**
@@ -23,6 +23,13 @@ Contents
 12. Acceptance tests (definition of done per module)
 13. Work split and milestones
 14. Open questions
+
+**0.2.2 changes** (after TestTailor, Zhou, Lou, Dong, Hao, PACMSE/FSE 2026, doi:10.1145/3797140):
+§2.5.1 demand-proximal tests replace "first test calling `m`"; §2.6 oracle lines carry trigger
+hints and related tests carry a demand diff; §2.8.5 static `target_hit`; §2.9 repair-cap pilot;
+§6 `target_hit` column with migration; §7 `--repeat`; §11 aligned-given-pass, LLM-call success
+rate, budget curve, variance protocol; §12 new rows. No change to Σ, to the prompts, or to the
+"0 LLM calls before S3" property.
 
 ---
 
@@ -154,14 +161,43 @@ loop while ¬Σ(D, ctx) ∧ |ctx.files| < B_files ∧ est_tokens(ctx) < B_tokens
     if ¬progressed: break
 status := "sufficient"  if Σ(D, ctx) ∧ unresolvable = ∅
           "fallback"    otherwise
-if status = "fallback":                                   -- IntentionTest-style backstop
-    ref := tests_calling(m)[:2]  ∨  tests_of_class(C)[:2]  (excluding the task's reference test)
-    ctx.files += files(ref); packet gains their source (≤ 40 lines each)
+if status = "fallback":                                   -- demand-proximal backstop (§2.5.1)
+    ref := rank(D, candidates(m, C))[:2]                   (excluding the task's reference test)
+    ctx.files += files(ref); packet gains their source (≤ 40 lines each) and their demand diff
 trace := one line per step: "<need> <- <recipe kind>:<rendered> (+files=[...])"
 ```
 
 Defaults (SHOULD): `B_files = 12`, `B_tokens = 2000` (packet size excluding the
 focal body), `d_max = 3`. All three are CLI knobs and ablation axes.
+
+### 2.5.1 Demand-proximal tests (`proximal.py`, no LLM)
+
+Static analog of the *path-proximal test* of TestTailor (Zhou et al., FSE 2026), whose
+ablation shows that the closest existing test plus the point where it diverges is the
+dominant lever, three times the effect of path constraints. DemandTest's target is not a
+path but the demand set `D`, so a test is ranked by the needs it already satisfies:
+
+```
+sat(T, D) := { n ∈ D, n = Receiver|Arg|Setup : T obtains a value of n.tau }
+             ∪ { n ∈ D, n = Oracle(kind, tau) : T shows oracle evidence of kind }
+  obtains   : fixture field of tau, resolved callee that is a ctor/factory/builder/helper of tau,
+              or a construction idiom in the source (`new Tau(`, `Tau.factory(`, `Tau.CONST`,
+              `mock(Tau.class)` for interfaces/abstract types, a test helper returning tau)
+  evidence  : exception   assertThrows|assertThatThrownBy|expected=|@Test(expected|catch(|fail(
+              return      any assertion
+              state       any assertion ∧ a call to an observable of tau
+              interaction verify(|then(..).should
+  A test whose callees contain m satisfies Receiver and every Arg need.
+  Literal-typed needs and Idiom are not scored (they carry no project knowledge).
+score(T, D)  := |sat(T, D)| / |scorable(D)|
+candidates   := tests_calling(m) ∪ tests_of_class(C) ∪ tests with a fixture of C
+                ∪ { T : a callee owner or a mentioned simple name ∈ types(scorable(D)) }, visible only (§9)
+rank         := sort by (−score, ¬calls m, |source|, id); drop score = 0
+```
+
+The **demand diff** of `T` is `(sat(T, D), D \ sat(T, D))`. §2.6 renders it above every
+related test (item 7) and uses the top-ranked test as the idiom example (item 6), so the
+packet says not just "here is a related test" but "it already obtains X and does not assert Y".
 
 ### 2.6 Knowledge packet (S2 → S3)
 
@@ -177,12 +213,21 @@ tail once `B_tokens` is exceeded (sections 1–3 and 5 are never dropped; §12 i
    `// <OwnerSimpleName>`. Fixture recipes render as
    `// see <TestClass>: field <name> of type <T>` plus the fixture's
    initializer lines lifted from the test source (≤ 5 lines).
+   Oracle lines carry a **trigger hint** mined from the focal body by `trigger.py`
+   (syntactic guard collection over `if`/`else if`/`else`/loop headers/`catch`; no
+   symbolic execution): `// triggered when: <conjunction of enclosing guards>` for
+   exception oracles (≤ 3 throw sites, filtered to the oracle type when one matches)
+   and `// returns: <expr>[ when <guards>]` for return oracles. Lambda bodies are
+   opaque. The hint is advisory and never enters Σ.
 4. `OBSERVABLE FOR ASSERTIONS` — ≤ 8 observable signatures for oracle needs.
 5. `PROJECT FACTS` — test framework, assertion lib, mocking lib, package of
    `C`, test root.
-6. `ASSERTION STYLE IN THIS PROJECT` — the first ≤ 25 lines of one existing
-   test calling `m` (else any test), labeled "example, do not copy blindly".
-7. `RELATED EXISTING TEST …` — only in `fallback` status, ≤ 40 lines each.
+6. `ASSERTION STYLE IN THIS PROJECT` — the first ≤ 25 lines of the top-ranked
+   demand-proximal test (§2.5.1; else any visible test), labeled "example, do not
+   copy blindly".
+7. `RELATED EXISTING TEST …` — only in `fallback` status, ≤ 40 lines each, headed by
+   its demand diff: `// satisfies: receiver (Foo), arg0 (Bar) | missing: oracle/exception
+   (IOException): assert that the documented exception is thrown`.
 
 Rendered recipes: `new Foo(<literal int>, <literal String>)`,
 `Foo.of(...)`, `Foo.builder()...build()`, `Foo.INSTANCE`, `mock(Foo.class)`.
@@ -217,7 +262,13 @@ is acceptable for the pilot:
    `mvn -q -B -o -Dtest=<Class> -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test`
    (add `-pl <module> -am` for multi-module repos), timeout 900 s, `MAVEN_OPTS=-Xmx2g`.
    `compiled` ⇔ no `COMPILATION ERROR` / `cannot find symbol` and no timeout;
-   `passed` ⇔ exit 0 ∧ `Tests run: k, Failures: 0, Errors: 0`.
+   `passed` ⇔ exit 0 ∧ `Tests run: k, Failures: 0, Errors: 0`;
+   `target_hit` ⇔ the final source calls `m` (`.m(` or `::m`) ∧ every Oracle need of `D`
+   has oracle evidence (patterns of §2.5.1). Static, computed after S4 and again after S5,
+   stored in `results.target_hit`. It separates *passes* from *passes and checks the
+   intention*: TestTailor reports 15–36 % of executing tests missing their target even
+   with strict filtering, and a passing test that asserts the wrong thing is the worst
+   outcome for R1 because it looks like success.
 6. **Diagnostics trimming**: first javac error block (8 lines) or first
    failure line + ≤ 5 `at …` frames. This string is the only failure
    information S5 may see.
@@ -226,8 +277,10 @@ The generated test file is removed after the run unless `--keep`.
 
 ### 2.9 Semantic repair (S5)
 
-At most **one** LLM call (prompt §8.2), only if S4 compiled-but-failed or
-javac diagnostics survived S4. Input: the test, the trimmed diagnostics,
+At most **one** LLM call (prompt §8.2) in every headline configuration, only if S4
+compiled-but-failed or javac diagnostics survived S4. `--refine 2` exists solely for
+the repair-cap pilot of §11 (measure the marginal gain of a second round, as
+TestTailor did for its cap of three) and MUST NOT appear in a reported system row. Input: the test, the trimmed diagnostics,
 and the packet's sections 1, 3, 4. **No new files are opened**; the
 inspected-file count does not change in S5. S4 passes run again on the
 output, then compile-and-run once more.
@@ -366,7 +419,17 @@ expand.py
   class Resolver(index, d_max=3): candidates(fqn) -> list[Recipe] ; resolve(fqn, depth=0) -> Recipe | None
   sufficient(index, demands, ctx) -> (bool, unresolved: list[Need])   # §2.4
   expand(index, demands, task, budget_files=12, budget_tokens=2000, d_max=3, est_tokens=callable)
-      -> ExpansionResult(ctx, status: "sufficient"|"fallback", unresolved, trace: list[str], referable_tests)
+      -> ExpansionResult(ctx, status: "sufficient"|"fallback", unresolved, trace: list[str],
+                         referable_tests, referable_diffs: {test_id: DemandDiff})
+
+proximal.py                                      # §2.5.1, no LLM
+  diff(index, task, demands, test) -> DemandDiff(test, satisfied, missing, calls_focal, score)
+  rank(index, task, demands, k=2) -> list[DemandDiff]     # honors excluded tests; drops score 0
+  render_diff(d) -> str ; ORACLE_EVIDENCE: {kind: regex}   # shared with execute.target_hit
+
+trigger.py                                       # §2.6 item 3, no LLM
+  triggers(method_src) -> list[Trigger(kind: "throw"|"return", text, guards)]
+  oracle_triggers(method_src, kind, tau) -> list[str]     # rendered hints, ≤ 3
 
 packet.py
   est_tokens(text) -> int
@@ -388,6 +451,7 @@ repair.py
   static_repair(index, task, src) -> (src', fixes: list[str])   # §2.8 passes 1–4
 
 execute.py
+  target_hit(src, task, demands) -> int          # §2.8.5, static
   write_test(repo, task, src, test_root) -> Path
   compile_and_run(repo, task, src, test_root="src/test/java", timeout_s=900, module=None)
       -> Verdict(compiled, passed, wall_ms, diagnostics, n_asserts, test_path, raw_tail)
@@ -397,9 +461,11 @@ refine.py
   refine_once(client, index, task, src, verdict, packet, max_tokens=1200) -> str   # §2.9, prompt §8.2
 
 metrics.py
-  summarize(conn) -> rows (per system×model: n, compile_rate, pass_rate, mutation, alignment,
-                            tokens_per_task, calls_per_task, wall_s, files_per_task)
-  pareto(conn)    -> rows (demandtest configs: pass_rate vs tokens_per_task)
+  summarize(conn) -> rows (per system×model: n, compile_rate, pass_rate, target_hit_rate,
+                            aligned_pass_rate, mutation, alignment, tokens_per_task, calls_per_task,
+                            call_success, wall_s, files_per_task)
+  pareto(conn)    -> rows (demandtest configs: pass_rate, aligned_pass_rate vs tokens_per_task)
+  budget_curve(conn, points=10) -> rows (per system×model: runs, cum_tokens, cum_passed, pass_rate)
   format_table(rows) -> markdown
 
 cli.py   see §7.  run_one(conn, repo_row, task, args): S1→S5 with a checkpoint after each stage;
@@ -432,7 +498,8 @@ CREATE TABLE file_access(run_id INTEGER NOT NULL REFERENCES runs(id), path TEXT 
   PRIMARY KEY(run_id, path));
 CREATE TABLE results(run_id INTEGER PRIMARY KEY REFERENCES runs(id), compiled INTEGER, passed INTEGER,
   n_asserts INTEGER, mutation_score REAL, alignment_score REAL, wall_ms INTEGER, inspected_files INTEGER,
-  prompt_tokens INTEGER, completion_tokens INTEGER, n_llm_calls INTEGER, test_path TEXT, notes TEXT);
+  prompt_tokens INTEGER, completion_tokens INTEGER, n_llm_calls INTEGER, test_path TEXT, notes TEXT,
+  target_hit INTEGER);                                    -- 0.2.2; init_schema ALTERs older ledgers
 ```
 
 `config_hash` = sha256 of the canonical JSON of the run config, 12 hex chars.
@@ -463,7 +530,9 @@ demandtest add-repo     --db … --name cron-utils --path data/repos/cron-utils 
 demandtest import-tasks --db … --repo cron-utils --tasks data/tasks/cron-utils.jsonl
 demandtest run          --db … --repo cron-utils --system demandtest --model <name> [--index path]
                         [--budget-files 12] [--budget-tokens 2000] [--d-max 3] [--refine 1]
-                        [--limit N] [--force] [--dry-run] [--keep]
+                        [--repeat K] [--limit N] [--force] [--dry-run] [--keep]
+                        # --repeat K (K ≥ 1) enters the config, so each K is a distinct run (§11 variance)
+                        # --refine 2 is the repair-cap pilot only (§2.9)
 demandtest report       --db …            # prints summarize() and pareto() as markdown
 ```
 
@@ -588,6 +657,24 @@ check the expected result? — calibrated on the human 10 % sample; report
 Cohen's κ), tokens, calls, `wall_ms`, `inspected_files`, cost per passing
 test (provider price × tokens).
 
+Added in 0.2.2 (after TestTailor's evaluation):
+- `target_hit` rate and **aligned-given-pass** = mean(passed ∧ target_hit): a passing test
+  that does not call `m` or lacks the oracle the intention asks for is not a success.
+- **LLM-call success rate** = Σ passed / Σ n_llm_calls per system: usable tests per model call.
+- **Budget curve**: cumulative passes against cumulative tokens in task order
+  (`metrics.budget_curve`, printed by `report`); the poster figure next to the Pareto plot.
+  Agent baselines count every call, including tool-call turns (unlike TestTailor's cost
+  table, which excluded CoverUp's tool calls); those turns are the cost R3 asks us to remove.
+
+**Variance protocol.** Every configuration runs once over the full task set. Three projects
+(smallest, median, largest by task count) additionally run ten times with `--repeat 1..10`;
+report the maximum standard deviation of pass rate and whether the system ranking is the
+same in every repeat.
+
+**Repair-cap pilot.** On the pilot projects run `--refine 2` and report the marginal
+aligned-pass gain of the second round against its extra tokens. The cap of §2.9 stays at 1
+unless the second round adds ≥ 2 points for ≤ 10 % extra tokens.
+
 RQ1 quality parity with the agent baseline; RQ2 efficiency deltas vs. the
 R3 thresholds (≥ 50 % tokens, ≥ 20 % wall-clock) plus inspected files;
 RQ3 ablations (packet vs. full-class context vs. embedding retrieval; static
@@ -615,6 +702,12 @@ All tests run offline, no LLM, no Java toolchain, on a hand-written fixture
 | `cli` | `run --dry-run` on the fixture repo produces one `runs` row with `status='done'` and checkpoints S1–S4; re-running is a no-op; `report` prints a table. |
 | `indexer` (Java) | On a 3-file sample project: every constructor/factory/builder/singleton in the sample appears; `callees` of the sample test resolve to the focal method; `body_reads_fields` lists the read field. |
 | `parse_trajectory` | A recorded OpenHands trajectory fixture yields the expected number of `llm_calls` and the expected distinct `file_access` paths. |
+| `proximal` | On the fixture, `rank` returns FooTest (score 3/5) then BarTest (1/5) for the mini task and drops WheelImplTest; with the reference test excluded it returns BarTest only; `diff(BarTest)` lists arg0 as satisfied and receiver, setup, both oracles as missing; `render_diff` names both sides. |
+| `trigger` | On `Foo#process` the exception trigger is `n < 0` and the return expression is `store.size() + n`; an `else if` arm negates its predecessors; a single-statement `if` guards only the next statement; a dangling `else` binds to the innermost `if`; strings, comments and lambda bodies never yield guards. |
+| `execute` (target_hit) | A source calling `process` with `assertThrows` and an `assertEquals` hits; one without the focal call, or with only `assertEquals`, does not. |
+| `db` (migration) | `init_schema` on a ledger created without `target_hit` adds the column and stays idempotent; `finish_run` stores `target_hit`. |
+| `metrics` | `summarize` exposes `target_hit_rate`, `aligned_pass_rate`, `call_success` with the expected values on a seeded ledger; `budget_curve` is cumulative and sampled at ≤ `points` runs. |
+| `cli` (0.2.2) | The S4 checkpoint and `results` carry `target_hit`; `--repeat 1` creates a second run with a different `config_hash`; `--refine 3` is rejected; `report` prints the budget curve. |
 
 ---
 

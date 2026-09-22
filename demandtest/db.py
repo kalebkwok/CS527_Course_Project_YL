@@ -31,8 +31,12 @@ CREATE TABLE IF NOT EXISTS file_access(run_id INTEGER NOT NULL REFERENCES runs(i
   PRIMARY KEY(run_id, path));
 CREATE TABLE IF NOT EXISTS results(run_id INTEGER PRIMARY KEY REFERENCES runs(id), compiled INTEGER, passed INTEGER,
   n_asserts INTEGER, mutation_score REAL, alignment_score REAL, wall_ms INTEGER, inspected_files INTEGER,
-  prompt_tokens INTEGER, completion_tokens INTEGER, n_llm_calls INTEGER, test_path TEXT, notes TEXT);
+  prompt_tokens INTEGER, completion_tokens INTEGER, n_llm_calls INTEGER, test_path TEXT, notes TEXT,
+  target_hit INTEGER);
 """
+
+# Columns added after the schema was frozen (§6); init_schema adds them to older ledgers.
+MIGRATIONS = {"results": {"target_hit": "INTEGER"}}
 
 TASK_REQUIRED_KEYS = {"focal_class", "focal_method", "focal_sig", "focal_file", "intention", "ref_test_id"}
 
@@ -49,8 +53,13 @@ def connect(path: str) -> sqlite3.Connection:
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    """Idempotent: CREATE TABLE IF NOT EXISTS, twice is a no-op (§12 db test)."""
+    """Idempotent: CREATE TABLE IF NOT EXISTS plus ALTER TABLE for MIGRATIONS; twice is a no-op (§12 db test)."""
     conn.executescript(SCHEMA)
+    for table, columns in MIGRATIONS.items():
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, decl in columns.items():
+            if column not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     conn.commit()
 
 
@@ -172,7 +181,8 @@ def log_file_access(conn, run_id: int, path: str, stage: str) -> None:
 def finish_run(conn, run_id: int, status: str, *, compiled: int | None = None, passed: int | None = None,
                n_asserts: int | None = None, mutation_score: float | None = None,
                alignment_score: float | None = None, wall_ms: int | None = None,
-               test_path: str | None = None, notes: str | None = None) -> None:
+               test_path: str | None = None, notes: str | None = None,
+               target_hit: int | None = None) -> None:
     """Write results with derived token/call/file columns, then close the run."""
     pt, ct, ncalls = conn.execute(
         "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), COUNT(*) "
@@ -181,10 +191,10 @@ def finish_run(conn, run_id: int, status: str, *, compiled: int | None = None, p
     with conn:
         conn.execute(
             "INSERT OR REPLACE INTO results(run_id, compiled, passed, n_asserts, mutation_score, alignment_score, "
-            "wall_ms, inspected_files, prompt_tokens, completion_tokens, n_llm_calls, test_path, notes) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "wall_ms, inspected_files, prompt_tokens, completion_tokens, n_llm_calls, test_path, notes, target_hit) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, compiled, passed, n_asserts, mutation_score, alignment_score, wall_ms, nfiles,
-             pt, ct, ncalls, test_path, notes),
+             pt, ct, ncalls, test_path, notes, target_hit),
         )
         conn.execute("UPDATE runs SET status=?, finished_at=? WHERE id=?", (status, time_now(), run_id))
 

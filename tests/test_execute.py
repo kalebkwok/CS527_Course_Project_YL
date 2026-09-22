@@ -77,6 +77,22 @@ class ExecuteTest(unittest.TestCase):
                'assertThat(y).isEqualTo(2);\nfoo(1);\n')
         self.assertEqual(execute.count_asserts(src), 4)
 
+    def test_target_hit_requires_focal_call_and_every_oracle(self):
+        from demandtest import demand
+        from tests._util import load_mini_index
+        index, task = load_mini_index(), mini_task()
+        demands = demand.compute_demands(index, task)  # oracles: exception + state
+        both = ('class T { @Test void t() throws Exception { Foo foo = new Foo();\n'
+                'assertThrows(IOException.class, () -> foo.process(Bar.of("a"), -1));\n'
+                'assertEquals(1, foo.process(Bar.of("a"), 1)); } }')
+        self.assertEqual(execute.target_hit(both, task, demands), 1)
+        no_call = 'class T { @Test void t() { assertEquals(2, 1 + 1); } }'
+        self.assertEqual(execute.target_hit(no_call, task, demands), 0)
+        only_state = 'class T { @Test void t() throws Exception { assertEquals(1, new Foo().process(Bar.of("a"), 1)); } }'
+        self.assertEqual(execute.target_hit(only_state, task, demands), 0)  # exception oracle missing
+        method_ref = 'class T { @Test void t() { assertThrows(IOException.class, foo::process); assertTrue(true); } }'
+        self.assertEqual(execute.target_hit(method_ref, task, demands), 1)
+
     def test_maven_command_matches_spec(self):
         cmd = execute.maven_command("FooTestGeneratedTest")
         self.assertEqual(cmd[:4], ["mvn", "-q", "-B", "-o"])

@@ -68,14 +68,23 @@ class ExpandTest(unittest.TestCase):
         result = expand.expand(self.index, self.demands, self.task, budget_files=1)
         self.assertEqual(result.status, "fallback")
         self.assertEqual(result.trace, [])  # budget already exhausted by the focal file
-        self.assertEqual([t.id for t in result.referable_tests], ["com.mini.FooTest#testProcessRoundTrips"])
+        # §2.5.1: ranked by demand overlap — the test calling m first, then the one that builds a Bar;
+        # WheelImplTest overlaps nothing and is not referable.
+        self.assertEqual([t.id for t in result.referable_tests],
+                         ["com.mini.FooTest#testProcessRoundTrips", "com.mini.BarTest#testOfParsesValue"])
         self.assertIn("src/test/java/com/mini/FooTest.java", result.ctx.files)
+        self.assertIn("src/test/java/com/mini/BarTest.java", result.ctx.files)
+        self.assertEqual(set(result.referable_diffs), {t.id for t in result.referable_tests})
+        self.assertGreater(result.referable_diffs["com.mini.FooTest#testProcessRoundTrips"].score,
+                           result.referable_diffs["com.mini.BarTest#testOfParsesValue"].score)
 
     def test_fallback_referable_tests_exclude_the_reference_test(self):
         with self.index.excluded_scope({self.task.ref_test_id}):
             result = expand.expand(self.index, self.demands, self.task, budget_files=1)
         self.assertEqual(result.status, "fallback")
-        self.assertEqual(result.referable_tests, [])
+        ids = [t.id for t in result.referable_tests]
+        self.assertNotIn("com.mini.FooTest#testProcessRoundTrips", ids)  # §9 leakage control
+        self.assertEqual(ids, ["com.mini.BarTest#testOfParsesValue"])
 
     def test_interaction_oracle_without_mocking_is_unresolvable(self):
         self.index.project["mocking_lib"] = "none"

@@ -20,6 +20,25 @@ class DbTest(unittest.TestCase):
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({"repos", "tasks", "runs", "checkpoints", "llm_calls", "file_access", "results"} <= tables)
 
+    def test_init_schema_migrates_an_older_ledger(self):
+        conn = db.connect(":memory:")
+        self.addCleanup(conn.close)
+        old_results = db.SCHEMA.replace(",\n  target_hit INTEGER);", ");")
+        self.assertNotIn("target_hit", old_results)
+        conn.executescript(old_results)  # a ledger written before 0.2.2
+        db.init_schema(conn)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(results)")}
+        self.assertIn("target_hit", cols)
+        db.init_schema(conn)  # still idempotent
+
+    def test_finish_run_records_target_hit(self):
+        conn = self._conn()
+        repo_id = db.add_repo(conn, "mini", "/tmp/mini")
+        task_id = make_task_row(conn, repo_id)
+        run_id = db.start_run(conn, task_id, "demandtest", "m", {"x": 1})
+        db.finish_run(conn, run_id, "done", compiled=1, passed=1, n_asserts=2, wall_ms=1, target_hit=1)
+        self.assertEqual(conn.execute("SELECT target_hit FROM results WHERE run_id=?", (run_id,)).fetchone()[0], 1)
+
     def test_start_run_twice_returns_same_id(self):
         conn = self._conn()
         repo_id = db.add_repo(conn, "mini", "/tmp/mini")

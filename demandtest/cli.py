@@ -63,7 +63,10 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("--budget-files", type=int, default=expand.DEFAULT_BUDGET_FILES)
     s.add_argument("--budget-tokens", type=int, default=expand.DEFAULT_BUDGET_TOKENS)
     s.add_argument("--d-max", type=int, default=expand.DEFAULT_D_MAX)
-    s.add_argument("--refine", type=int, default=1, help="max S5 rounds (0 or 1)")
+    s.add_argument("--refine", type=int, default=1, choices=(0, 1, 2),
+                   help="max S5 rounds: 0 or 1; 2 only for the repair-cap pilot of SPEC §11")
+    s.add_argument("--repeat", type=int, default=0,
+                   help="repeat index for the variance protocol of SPEC §11; each value is a distinct run")
     s.add_argument("--limit", type=int, default=None)
     s.add_argument("--force", action="store_true")
     s.add_argument("--dry-run", action="store_true")
@@ -78,12 +81,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _config(args, system: str) -> dict:
-    return {
+    config = {
         "system": system, "model": args.model, "budget_files": args.budget_files,
         "budget_tokens": args.budget_tokens, "d_max": args.d_max, "refine": args.refine,
         "dry_run": bool(args.dry_run), "keep": bool(args.keep), "prompts_sha": PROMPTS_SHA,
         "test_root": args.test_root, "module": args.module,
     }
+    if getattr(args, "repeat", 0):  # only when set, so default runs keep their config_hash
+        config["repeat"] = int(args.repeat)
+    return config
 
 
 # ---------------------------------------------------------------- S1-S5 run
@@ -137,7 +143,7 @@ def run_one(conn, repo_row, index, task: Task, run_id: int, args) -> None:
                     "packet_est_tokens": pkt.est_tokens, "raw_reply": reply[:4000],
                     "parse_error": str(e),
                 })
-                db.finish_run(conn, run_id, "done", compiled=0, passed=0, n_asserts=0,
+                db.finish_run(conn, run_id, "done", compiled=0, passed=0, n_asserts=0, target_hit=0,
                               wall_ms=int((time.monotonic() - started) * 1000), notes="parse-error")
                 return
             db.checkpoint(conn, run_id, "S3", {
@@ -153,30 +159,36 @@ def run_one(conn, repo_row, index, task: Task, run_id: int, args) -> None:
     else:
         verdict = execute.compile_and_run(repo_path, task, src_fixed, test_root=args.test_root,
                                          timeout_s=args.timeout, module=args.module, keep=args.keep)
+    hit = execute.target_hit(src_fixed, task, demands)
     db.checkpoint(conn, run_id, "S4", {
         "fixes": fixes, "compiled": verdict.compiled, "passed": verdict.passed,
         "n_asserts": verdict.n_asserts, "diagnostics": verdict.diagnostics[:2000], "src": src_fixed,
+        "target_hit": hit,
     })
 
-    # ---- S5 semantic repair: at most one call, only on compiled-but-failed
-    if not args.dry_run and verdict.compiled and not verdict.passed and args.refine > 0:
+    # ---- S5 semantic repair: at most one call by default, only on compiled-but-failed.
+    # A second round exists only for the repair-cap pilot (§2.9, §11) and is never a headline setting.
+    round_no = 0
+    while not args.dry_run and verdict.compiled and not verdict.passed and round_no < args.refine:
+        round_no += 1
         client = _make_client(conn, run_id, args)
         src2 = refine.refine_once(client, index, task, src_fixed, verdict, pkt)
         src2_fixed, fixes2 = repair.static_repair(index, task, src2, focal_source)
         verdict = execute.compile_and_run(repo_path, task, src2_fixed, test_root=args.test_root,
                                          timeout_s=args.timeout, module=args.module, keep=args.keep)
-        db.checkpoint(conn, run_id, "S5", {
-            "fixes": fixes2, "compiled": verdict.compiled, "passed": verdict.passed,
-            "diagnostics": verdict.diagnostics[:2000], "src": src2_fixed,
-        })
         src_fixed = src2_fixed
+        hit = execute.target_hit(src_fixed, task, demands)
+        db.checkpoint(conn, run_id, "S5" if round_no == 1 else f"S5-{round_no}", {
+            "round": round_no, "fixes": fixes2, "compiled": verdict.compiled, "passed": verdict.passed,
+            "diagnostics": verdict.diagnostics[:2000], "src": src2_fixed, "target_hit": hit,
+        })
 
     if not args.keep and not args.dry_run:
         execute.remove_test(repo_path, verdict.test_path)
     db.finish_run(conn, run_id, "done", compiled=verdict.compiled, passed=verdict.passed,
                   n_asserts=verdict.n_asserts, wall_ms=int((time.monotonic() - started) * 1000),
                   test_path=verdict.test_path if (args.keep and not args.dry_run) else None,
-                  notes=verdict.notes or None)
+                  notes=verdict.notes or None, target_hit=hit)
 
 
 def _make_client(conn, run_id: int, args):
@@ -266,10 +278,13 @@ def cmd_report(args) -> int:
         db.init_schema(conn)
         summary = metrics.format_table(metrics.summarize(conn))
         frontier = metrics.format_table(metrics.pareto(conn))
+        curve = metrics.format_table(metrics.budget_curve(conn), metrics.CURVE_COLUMNS)
     print("## Summary (per system x model)\n")
     print(summary)
     print("\n## Pareto (demandtest configs: pass_rate vs tokens_per_task)\n")
     print(frontier)
+    print("\n## Budget curve (cumulative passes vs cumulative tokens, task order; §11)\n")
+    print(curve)
     return 0
 
 

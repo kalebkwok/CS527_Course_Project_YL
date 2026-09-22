@@ -71,6 +71,7 @@ class CliTest(unittest.TestCase):
         s4 = db.get_checkpoint(conn, run["id"], "S4")
         self.assertIn("S4", stages)
         self.assertTrue(s4["src"].startswith("package com.mini;"))
+        self.assertEqual(s4["target_hit"], 0)  # the canned dry-run test never calls process(...)
 
         # accounting is derived from the ledger, never written by hand (§6)
         results = conn.execute("SELECT * FROM results WHERE run_id=?", (run["id"],)).fetchone()
@@ -81,6 +82,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(results["n_llm_calls"], 1)  # exactly one S3 call; S5 skipped
         self.assertGreater(results["prompt_tokens"], 0)
         self.assertIn("dry-run", results["notes"] or "")
+        self.assertEqual(results["target_hit"], 0)
+
+    def test_repeat_creates_a_distinct_run_for_the_variance_protocol(self):
+        self._prepare()
+        self._main(self.run_args)
+        rc, output = self._main(self.run_args + ["--repeat", "1"])
+        self.assertEqual(rc, 0)
+        self.assertIn("1 executed", output)
+        conn = self._conn()
+        hashes = [r[0] for r in conn.execute("SELECT config_hash FROM runs ORDER BY id")]
+        self.assertEqual(len(hashes), 2)
+        self.assertNotEqual(hashes[0], hashes[1])
+
+    def test_refine_rejects_more_than_two_rounds(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            cli._build_parser().parse_args(self.run_args + ["--refine", "3"])
 
     def test_second_run_is_a_no_op(self):
         self._prepare()
@@ -108,6 +125,9 @@ class CliTest(unittest.TestCase):
         self.assertIn("demandtest", output)
         self.assertIn("tokens_per_task", output)
         self.assertIn("pass_rate", output)
+        self.assertIn("aligned_pass_rate", output)
+        self.assertIn("Budget curve", output)
+        self.assertIn("cum_tokens", output)
 
     def test_run_without_index_is_rejected(self):
         self._prepare()
