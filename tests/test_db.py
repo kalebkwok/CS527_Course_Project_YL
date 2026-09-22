@@ -23,12 +23,14 @@ class DbTest(unittest.TestCase):
     def test_init_schema_migrates_an_older_ledger(self):
         conn = db.connect(":memory:")
         self.addCleanup(conn.close)
-        old_results = db.SCHEMA.replace(",\n  target_hit INTEGER);", ");")
+        old_results = db.SCHEMA.replace(",\n  target_hit INTEGER, packet_status TEXT);", ");")
         self.assertNotIn("target_hit", old_results)
+        self.assertNotIn("packet_status", old_results)
         conn.executescript(old_results)  # a ledger written before 0.2.2
         db.init_schema(conn)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(results)")}
         self.assertIn("target_hit", cols)
+        self.assertIn("packet_status", cols)
         db.init_schema(conn)  # still idempotent
 
     def test_finish_run_records_target_hit(self):
@@ -36,8 +38,10 @@ class DbTest(unittest.TestCase):
         repo_id = db.add_repo(conn, "mini", "/tmp/mini")
         task_id = make_task_row(conn, repo_id)
         run_id = db.start_run(conn, task_id, "demandtest", "m", {"x": 1})
-        db.finish_run(conn, run_id, "done", compiled=1, passed=1, n_asserts=2, wall_ms=1, target_hit=1)
-        self.assertEqual(conn.execute("SELECT target_hit FROM results WHERE run_id=?", (run_id,)).fetchone()[0], 1)
+        db.finish_run(conn, run_id, "done", compiled=1, passed=1, n_asserts=2, wall_ms=1, target_hit=1,
+                      packet_status="sufficient")
+        row = conn.execute("SELECT target_hit, packet_status FROM results WHERE run_id=?", (run_id,)).fetchone()
+        self.assertEqual((row[0], row[1]), (1, "sufficient"))
 
     def test_start_run_twice_returns_same_id(self):
         conn = self._conn()

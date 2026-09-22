@@ -32,11 +32,11 @@ CREATE TABLE IF NOT EXISTS file_access(run_id INTEGER NOT NULL REFERENCES runs(i
 CREATE TABLE IF NOT EXISTS results(run_id INTEGER PRIMARY KEY REFERENCES runs(id), compiled INTEGER, passed INTEGER,
   n_asserts INTEGER, mutation_score REAL, alignment_score REAL, wall_ms INTEGER, inspected_files INTEGER,
   prompt_tokens INTEGER, completion_tokens INTEGER, n_llm_calls INTEGER, test_path TEXT, notes TEXT,
-  target_hit INTEGER);
+  target_hit INTEGER, packet_status TEXT);
 """
 
 # Columns added after the schema was frozen (§6); init_schema adds them to older ledgers.
-MIGRATIONS = {"results": {"target_hit": "INTEGER"}}
+MIGRATIONS = {"results": {"target_hit": "INTEGER", "packet_status": "TEXT"}}
 
 TASK_REQUIRED_KEYS = {"focal_class", "focal_method", "focal_sig", "focal_file", "intention", "ref_test_id"}
 
@@ -182,7 +182,7 @@ def finish_run(conn, run_id: int, status: str, *, compiled: int | None = None, p
                n_asserts: int | None = None, mutation_score: float | None = None,
                alignment_score: float | None = None, wall_ms: int | None = None,
                test_path: str | None = None, notes: str | None = None,
-               target_hit: int | None = None) -> None:
+               target_hit: int | None = None, packet_status: str | None = None) -> None:
     """Write results with derived token/call/file columns, then close the run."""
     pt, ct, ncalls = conn.execute(
         "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), COUNT(*) "
@@ -191,10 +191,10 @@ def finish_run(conn, run_id: int, status: str, *, compiled: int | None = None, p
     with conn:
         conn.execute(
             "INSERT OR REPLACE INTO results(run_id, compiled, passed, n_asserts, mutation_score, alignment_score, "
-            "wall_ms, inspected_files, prompt_tokens, completion_tokens, n_llm_calls, test_path, notes, target_hit) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "wall_ms, inspected_files, prompt_tokens, completion_tokens, n_llm_calls, test_path, notes, target_hit, "
+            "packet_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, compiled, passed, n_asserts, mutation_score, alignment_score, wall_ms, nfiles,
-             pt, ct, ncalls, test_path, notes, target_hit),
+             pt, ct, ncalls, test_path, notes, target_hit, packet_status),
         )
         conn.execute("UPDATE runs SET status=?, finished_at=? WHERE id=?", (status, time_now(), run_id))
 

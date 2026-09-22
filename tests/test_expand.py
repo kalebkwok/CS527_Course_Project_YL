@@ -86,6 +86,57 @@ class ExpandTest(unittest.TestCase):
         self.assertNotIn("com.mini.FooTest#testProcessRoundTrips", ids)  # §9 leakage control
         self.assertEqual(ids, ["com.mini.BarTest#testOfParsesValue"])
 
+    def test_package_private_ctor_is_usable_only_from_the_focal_package(self):
+        from demandtest.index import Index, Method, TypeInfo
+        hidden = TypeInfo(fqn="com.other.Hidden", package="com.other", file="H.java",
+                          ctors=[Method(name="<init>", params=[], visibility="package", owner="com.other.Hidden")])
+        idx = Index(dict(self.index.project), {"com.other.Hidden": hidden}, [], {})
+        self.assertIsNone(Resolver(idx, test_package="com.mini").resolve("com.other.Hidden"))
+        self.assertEqual(Resolver(idx, test_package="com.mini").reasons.get("com.other.Hidden"), None)  # set on resolve below
+        r = Resolver(idx, test_package="com.mini")
+        r.resolve("com.other.Hidden")
+        self.assertEqual(r.reasons["com.other.Hidden"], "inaccessible")
+        self.assertIsNotNone(Resolver(idx, test_package="com.other").resolve("com.other.Hidden"))
+        self.assertIsNotNone(Resolver(idx).resolve("com.other.Hidden"))  # no package given: no check (pilot fixture mode)
+
+    def test_unresolved_reasons_are_classified(self):
+        from demandtest.index import Index, Method, TypeInfo
+        sealed = TypeInfo(fqn="com.mini.Sealed", package="com.mini", file="S.java",
+                          ctors=[Method(name="<init>", params=[], visibility="private", owner="com.mini.Sealed")])
+        idx = Index(dict(self.index.project), {"com.mini.Sealed": sealed}, [], {})
+        r = Resolver(idx, test_package="com.mini")
+        for tau, reason in (("T", "generic_erased"), ("com.nope.Missing", "offindex"),
+                            ("java.util.concurrent.ExecutorService", "jdk_no_recipe"), ("com.mini.Sealed", "no_path")):
+            self.assertIsNone(r.resolve(tau))
+            self.assertEqual(r.reasons[tau], reason, tau)
+        task = mini_task()
+        task.intention = {"objective": "delegates", "preconditions": "", "expected_results": "process must invoke the delegate"}
+        self.index.project["mocking_lib"] = "none"
+        result = expand.expand(self.index, demand.compute_demands(self.index, task), task)
+        self.assertEqual(result.unresolved_reasons.get("oracle:com.mini.Store:interaction"), "no_mocking_lib")
+
+    def test_expand_past_sigma_is_deterministic_and_nested(self):
+        base = expand.expand(self.index, self.demands, self.task)
+        plus2 = expand.expand(self.index, self.demands, self.task, expand_past=2)
+        plus4 = expand.expand(self.index, self.demands, self.task, expand_past=4)
+        self.assertEqual(base.extended_by, 0)
+        self.assertEqual(plus2.status, "sufficient")
+        self.assertGreaterEqual(plus2.extended_by, 2)
+        self.assertGreaterEqual(plus4.extended_by, plus2.extended_by)
+
+        def names(res):
+            ents = {(type(e).__name__, getattr(e, "owner", None), getattr(e, "name", None)) for e in res.ctx.entities}
+            return ents, set(res.ctx.files), {t.id for t in res.referable_tests}
+        e0, f0, t0 = names(base); e2, f2, t2 = names(plus2); e4, f4, t4 = names(plus4)
+        self.assertTrue(e0 <= e2 <= e4)
+        self.assertTrue(f0 <= f2 <= f4)
+        self.assertTrue(t0 <= t2 <= t4)
+        self.assertTrue(any(line.startswith("past-Σ") for line in plus2.trace))
+        # the first continuation step is the cheapest unused alternative for a construction need
+        self.assertTrue(any("past-Σ setup:com.mini.Store:store <- alt" in line for line in plus2.trace))
+        again = expand.expand(self.index, self.demands, self.task, expand_past=2)
+        self.assertEqual(again.trace, plus2.trace)
+
     def test_interaction_oracle_without_mocking_is_unresolvable(self):
         self.index.project["mocking_lib"] = "none"
         task = mini_task()

@@ -60,6 +60,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(stages, {"S1", "S2", "S3", "S4"})  # no S5 in a dry run
 
         s1 = db.get_checkpoint(conn, run["id"], "S1")
+        self.assertEqual(s1["semantic_gaps"]["total"], 0)
         self.assertEqual([n["key"] if "key" in n else f"{n['kind']}:{n['type']}:{n['detail']}"
                           for n in s1["demands"]],
                          ["receiver:com.mini.Foo:", "arg:com.mini.Bar:0", "arg:int:1",
@@ -68,6 +69,10 @@ class CliTest(unittest.TestCase):
         s2 = db.get_checkpoint(conn, run["id"], "S2")
         self.assertEqual(s2["status"], "sufficient")
         self.assertGreaterEqual(len(s2["trace"]), 1)
+        self.assertEqual(s2["unresolved_reasons"], {})
+        self.assertEqual(s2["extended_by"], 0)
+        s3 = db.get_checkpoint(conn, run["id"], "S3")
+        self.assertEqual(s3["packet_status"], "sufficient")  # §2.4 final-packet invariant, on the rendered packet
         s4 = db.get_checkpoint(conn, run["id"], "S4")
         self.assertIn("S4", stages)
         self.assertTrue(s4["src"].startswith("package com.mini;"))
@@ -83,6 +88,20 @@ class CliTest(unittest.TestCase):
         self.assertGreater(results["prompt_tokens"], 0)
         self.assertIn("dry-run", results["notes"] or "")
         self.assertEqual(results["target_hit"], 0)
+        self.assertEqual(results["packet_status"], "sufficient")
+
+    def test_expand_past_is_a_distinct_configuration(self):
+        self._prepare()
+        self._main(self.run_args)
+        rc, output = self._main(self.run_args + ["--expand-past", "2"])
+        self.assertEqual(rc, 0)
+        self.assertIn("1 executed", output)
+        conn = self._conn()
+        rows = conn.execute("SELECT id, config_json FROM runs ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertIn('"expand_past":2', rows[1]["config_json"])
+        s2 = db.get_checkpoint(conn, rows[1]["id"], "S2")
+        self.assertGreaterEqual(s2["extended_by"], 2)
 
     def test_repeat_creates_a_distinct_run_for_the_variance_protocol(self):
         self._prepare()
@@ -128,6 +147,8 @@ class CliTest(unittest.TestCase):
         self.assertIn("aligned_pass_rate", output)
         self.assertIn("Budget curve", output)
         self.assertIn("cum_tokens", output)
+        self.assertIn("Outcomes by packet status", output)
+        self.assertIn("sufficient", output)
 
     def test_run_without_index_is_rejected(self):
         self._prepare()

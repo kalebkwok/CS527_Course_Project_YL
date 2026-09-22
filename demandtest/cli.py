@@ -67,6 +67,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="max S5 rounds: 0 or 1; 2 only for the repair-cap pilot of SPEC §11")
     s.add_argument("--repeat", type=int, default=0,
                    help="repeat index for the variance protocol of SPEC §11; each value is a distinct run")
+    s.add_argument("--expand-past", type=int, default=0,
+                   help="RQ5: after Σ holds, add at least k more entities by the §2.5 continuation rule")
     s.add_argument("--limit", type=int, default=None)
     s.add_argument("--force", action="store_true")
     s.add_argument("--dry-run", action="store_true")
@@ -89,6 +91,8 @@ def _config(args, system: str) -> dict:
     }
     if getattr(args, "repeat", 0):  # only when set, so default runs keep their config_hash
         config["repeat"] = int(args.repeat)
+    if getattr(args, "expand_past", 0):
+        config["expand_past"] = int(args.expand_past)
     return config
 
 
@@ -109,12 +113,13 @@ def run_one(conn, repo_row, index, task: Task, run_id: int, args) -> None:
     with index.excluded_scope({task.ref_test_id}):  # leakage control (§9)
         # ---- S1 demand set (no LLM)
         demands = demand.compute_demands(index, task)
-        db.checkpoint(conn, run_id, "S1", {"demands": [asdict(n) for n in demands]})
+        gaps = demand.compute_gaps(index, task)
+        db.checkpoint(conn, run_id, "S1", {"demands": [asdict(n) for n in demands], "semantic_gaps": gaps})
 
-        # ---- S2 bounded expansion + sufficiency predicate (no LLM)
+        # ---- S2 bounded expansion + structural sufficiency predicate (no LLM)
         expansion = expand.expand(index, demands, task, budget_files=args.budget_files,
                                  budget_tokens=args.budget_tokens, d_max=args.d_max,
-                                 est_tokens=packet_mod.est_tokens)
+                                 est_tokens=packet_mod.est_tokens, expand_past=getattr(args, "expand_past", 0))
         inspected = set(expansion.ctx.files) | {task.focal_file}
         for path in sorted(inspected):
             db.log_file_access(conn, run_id, path, "S2")
@@ -125,9 +130,12 @@ def run_one(conn, repo_row, index, task: Task, run_id: int, args) -> None:
             "files": sorted(expansion.ctx.files),
             "inspected_files": sorted(inspected),
             "referable_tests": [t.id for t in expansion.referable_tests],
+            "unresolved_reasons": expansion.unresolved_reasons,
+            "extended_by": expansion.extended_by,
         })
         pkt = packet_mod.render(index, task, demands, expansion, focal_source=focal_source,
                                budget_tokens=args.budget_tokens)
+        packet_status = packet_mod.final_status(demands, expansion, pkt, gaps)  # §2.4 final-packet invariant
 
         # ---- S3 generation (exactly one call)
         if resumed_src:
@@ -144,10 +152,12 @@ def run_one(conn, repo_row, index, task: Task, run_id: int, args) -> None:
                     "parse_error": str(e),
                 })
                 db.finish_run(conn, run_id, "done", compiled=0, passed=0, n_asserts=0, target_hit=0,
+                              packet_status=packet_status,
                               wall_ms=int((time.monotonic() - started) * 1000), notes="parse-error")
                 return
             db.checkpoint(conn, run_id, "S3", {
-                "packet_est_tokens": pkt.est_tokens, "packet_status": expansion.status,
+                "packet_est_tokens": pkt.est_tokens, "packet_status": packet_status,
+                "packet_dropped": pkt.dropped, "expansion_status": expansion.status,
                 "raw_reply": reply[:4000], "src": src,
             })
 
@@ -188,7 +198,7 @@ def run_one(conn, repo_row, index, task: Task, run_id: int, args) -> None:
     db.finish_run(conn, run_id, "done", compiled=verdict.compiled, passed=verdict.passed,
                   n_asserts=verdict.n_asserts, wall_ms=int((time.monotonic() - started) * 1000),
                   test_path=verdict.test_path if (args.keep and not args.dry_run) else None,
-                  notes=verdict.notes or None, target_hit=hit)
+                  notes=verdict.notes or None, target_hit=hit, packet_status=packet_status)
 
 
 def _make_client(conn, run_id: int, args):
@@ -279,8 +289,11 @@ def cmd_report(args) -> int:
         summary = metrics.format_table(metrics.summarize(conn))
         frontier = metrics.format_table(metrics.pareto(conn))
         curve = metrics.format_table(metrics.budget_curve(conn), metrics.CURVE_COLUMNS)
+        status = metrics.format_table(metrics.by_status(conn), metrics.STATUS_COLUMNS)
     print("## Summary (per system x model)\n")
     print(summary)
+    print("\n## Outcomes by packet status (§2.4: sufficient / sufficient-with-gaps / budget-limited / fallback)\n")
+    print(status)
     print("\n## Pareto (demandtest configs: pass_rate vs tokens_per_task)\n")
     print(frontier)
     print("\n## Budget curve (cumulative passes vs cumulative tokens, task order; §11)\n")

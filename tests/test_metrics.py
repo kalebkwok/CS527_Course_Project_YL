@@ -17,7 +17,8 @@ class MetricsTest(unittest.TestCase):
             run_id = db.start_run(conn, task_id, "demandtest", "m", {"i": 0})
             for c in range(calls):
                 db.log_llm_call(conn, run_id, "generate", "m", tokens, 10, 1, f"p{i}{c}", f"r{i}{c}")
-            db.finish_run(conn, run_id, "done", compiled=1, passed=passed, n_asserts=1, wall_ms=10, target_hit=hit)
+            db.finish_run(conn, run_id, "done", compiled=1, passed=passed, n_asserts=1, wall_ms=10, target_hit=hit,
+                          packet_status="sufficient" if i % 2 == 0 else "fallback")
 
     def test_summary_exposes_alignment_and_call_success(self):
         conn = memory_conn()
@@ -45,6 +46,16 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual([c["cum_passed"] for c in curve], [5, 5, 5, 5, 5])
         self.assertAlmostEqual(curve[-1]["pass_rate"], 0.2)
         self.assertIn("cum_tokens", metrics.format_table(curve, metrics.CURVE_COLUMNS))
+
+    def test_by_status_stratifies_outcomes(self):
+        conn = memory_conn()
+        self.addCleanup(conn.close)
+        self._seed(conn, [(1, 1, 100, 1), (0, 0, 100, 1), (1, 1, 100, 1), (0, 0, 100, 1)])
+        rows = {r["packet_status"]: r for r in metrics.by_status(conn)}
+        self.assertEqual(set(rows), {"sufficient", "fallback"})
+        self.assertAlmostEqual(rows["sufficient"]["pass_rate"], 1.0)
+        self.assertAlmostEqual(rows["fallback"]["pass_rate"], 0.0)
+        self.assertIn("packet_status", metrics.format_table(list(rows.values()), metrics.STATUS_COLUMNS))
 
     def test_budget_curve_empty_ledger(self):
         conn = memory_conn()

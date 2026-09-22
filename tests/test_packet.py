@@ -78,6 +78,30 @@ class PacketTest(unittest.TestCase):
         self.assertNotIn("FooTest", pkt.text)
         self.assertIn("BarTest", pkt.text)  # falls back to another visible test
 
+    def test_final_status_reflects_the_rendered_packet(self):
+        gaps0 = {"counts": {}, "relations": [], "total": 0}
+        self.assertEqual(packet.final_status(self.demands, self.sufficient, self.pkt, gaps0), "sufficient")
+        self.assertEqual(self.pkt.dropped, [])
+        self.assertFalse(self.pkt.over_budget)
+        # a budget that drops section 4 removes the only observable evidence for the state oracle on Foo
+        small = packet.render(self.index, self.task, self.demands, self.sufficient,
+                              focal_source=focal_source(), budget_tokens=50)
+        self.assertIn(packet.SECTION_KEYS[3], small.dropped)
+        self.assertEqual(packet.final_status(self.demands, self.sufficient, small, gaps0), "budget-limited")
+        # semantic gaps downgrade a sufficient packet, never a budget-limited or fallback one
+        gaps1 = {"counts": {"relational": 1}, "relations": [], "total": 1}
+        self.assertEqual(packet.final_status(self.demands, self.sufficient, self.pkt, gaps1), "sufficient-with-gaps")
+        fallback = expand.expand(self.index, self.demands, self.task, budget_files=1)
+        fb_pkt = packet.render(self.index, self.task, self.demands, fallback, focal_source=focal_source())
+        self.assertEqual(packet.final_status(self.demands, fallback, fb_pkt, gaps1), "fallback")
+
+    def test_continuation_past_sigma_renders_related_tests(self):
+        plus = expand.expand(self.index, self.demands, self.task, expand_past=4)
+        pkt = packet.render(self.index, self.task, self.demands, plus, focal_source=focal_source())
+        self.assertEqual(plus.status, "sufficient")
+        self.assertIn(packet.SECTION_KEYS[6], pkt.sections)  # section 7 appears whenever related tests exist
+        self.assertIn("// satisfies:", pkt.sections[packet.SECTION_KEYS[6]])
+
     def test_est_tokens_falls_back_without_tiktoken(self):
         self.assertGreaterEqual(packet.est_tokens(""), 1)
         self.assertGreater(packet.est_tokens("a" * 360), packet.est_tokens("a" * 36))

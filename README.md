@@ -31,6 +31,17 @@ Still to build: `scripts/make_intentions.py` (task construction, §9), the OpenH
 (the trajectory parser exists, the headless launcher does not), and the evaluation harness
 (PIT mutation, LLM-judge alignment, amortized S0 cost reporting).
 
+**0.2.4 (2026-09-22), second review round; code and documentation.** Σ is claimed only for
+evidence the model receives: every run carries one of four statuses computed on the *rendered*
+packet (`sufficient`, `sufficient-with-gaps`, `budget-limited`, `fallback`), stored in
+`results.packet_status` and reported by `report`. Oracle cues follow one rule (expected results,
+else objective; negated cues removed). S1 records semantic-gap flags; S2 records an unresolved
+reason per need and honors package-private accessibility. `--expand-past k` applies a
+deterministic continuation rule so Σ ⊆ Σ+2 ⊆ Σ+4 are nested. SPEC §11 and `docs/PILOT.md` now
+separate the selection experiment from the stopping experiment, give the non-inferiority margin
+a rationale, treat the pilot's three projects as fixed case studies, and decide proceed /
+redesign / inconclusive. 100 offline tests.
+
 **0.2.3 (2026-09-22), after external review; documentation only.** Σ is now the *structural*
 context-sufficiency predicate, with its boundary, supported intention forms, evidence rules,
 recipe objective, and index scope written down (SPEC §2.4). Leakage control, the clone-available

@@ -8,9 +8,15 @@ Material assumptions (documented deviations/refinements of the §2.5 sketch):
 - `progressed` requires an actual context change, so needs that cannot be
   repaired by expansion (e.g. interaction with mocking_lib=none) terminate the
   loop instead of spinning.
+
+0.2.4 (after review): package-private constructors/factories are usable only from the focal
+package (the generated test's package, §2.8.1); every unresolvable need carries an
+`unresolved_reason` (§2.4.5); `expand_past=k` applies the deterministic continuation rule of
+§2.5 after Σ holds, so packets Σ ⊆ Σ+2 ⊆ Σ+4 are nested by construction.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -18,6 +24,8 @@ from . import packet as packet_mod
 from . import proximal
 from .demand import Need, find_focal
 from .index import Index, erase, is_jdk, is_literal, simple
+
+_TYPE_VAR = re.compile(r"[A-Z][A-Z0-9]?")  # `T`, `K`, `V2`: erased generic parameters (§2.4.5 generic_erased)
 
 DEFAULT_BUDGET_FILES = 12
 DEFAULT_BUDGET_TOKENS = 2000
@@ -96,16 +104,37 @@ class ExpansionResult:
     trace: list
     referable_tests: list
     referable_diffs: dict = field(default_factory=dict)  # test id -> proximal.DemandDiff (§2.5.1)
+    unresolved_reasons: dict = field(default_factory=dict)  # need key -> reason (§2.4.5)
+    extended_by: int = 0  # entities added past Σ by the continuation rule (§2.5)
 
 
 class Resolver:
     """resolve(tau, depth) -> cheapest Recipe (§2.3); memoized on (erase(tau), depth), cycle-guarded."""
 
-    def __init__(self, index: Index, d_max: int = DEFAULT_D_MAX):
+    def __init__(self, index: Index, d_max: int = DEFAULT_D_MAX, test_package: Optional[str] = None):
         self.index = index
         self.d_max = d_max
+        self.test_package = test_package  # package the generated test lives in (§2.8.1); None = no check
         self._memo: dict[tuple, Optional[Recipe]] = {}
         self._stack: set[str] = set()
+        self.reasons: dict[str, str] = {}  # erased type -> §2.4.5 unresolved_reason
+        self._inaccessible: set[str] = set()
+
+    def _accessible(self, t: TypeInfo, visibility: str) -> bool:
+        if visibility == "public":
+            return True
+        if visibility == "package" and (self.test_package is None or t.package == self.test_package):
+            return True
+        self._inaccessible.add(erase(t.fqn))
+        return False
+
+    def _classify(self, base: str) -> str:
+        t = self.index.type(base)
+        if t is None:
+            if _TYPE_VAR.fullmatch(base):
+                return "generic_erased"
+            return "jdk_no_recipe" if is_jdk(base) else "offindex"
+        return "inaccessible" if base in self._inaccessible else "no_path"
 
     def candidates(self, fqn: str, depth: int = 0) -> list[Recipe]:
         if depth >= self.d_max:
@@ -124,11 +153,13 @@ class Resolver:
                 if erase(hm.returns) == base:
                     out.append(Recipe("helper", base, 0, entity=hm))
         for c in t.ctors:
-            if c.visibility in ("public", "package"):
+            if c.visibility in ("public", "package") and self._accessible(t, c.visibility):
                 r = self._with_params(base, "ctor", c, depth)
                 if r is not None:
                     out.append(r)
         for f in t.factories:
+            if f.visibility in ("public", "package") and not self._accessible(t, f.visibility):
+                continue
             r = self._with_params(base, "factory", f, depth)
             if r is not None:
                 out.append(r)
@@ -141,7 +172,7 @@ class Resolver:
                 out.append(Recipe("mock", base, 1))
             for st in self.index.subtypes(base):
                 for c in st.ctors:
-                    if c.visibility in ("public", "package"):
+                    if c.visibility in ("public", "package") and self._accessible(st, c.visibility):
                         r = self._with_params(base, "subtype_ctor", c, depth,
                                               note=f"{simple(st.fqn)} <: {base}")
                         if r is not None:
@@ -172,16 +203,22 @@ class Resolver:
         key = (base, depth)
         if key in self._memo:
             return self._memo[key]
-        if base in self._stack or depth >= self.d_max:
+        if base in self._stack:
+            self.reasons.setdefault(base, "cycle")
             return None  # cycle guard: type currently being resolved resolves to ⊥
+        if depth >= self.d_max:
+            self.reasons.setdefault(base, "depth")
+            return None
         self._stack.add(base)
         try:
             cands = self.candidates(base, depth)
         finally:
             self._stack.discard(base)
         if not cands:
+            self.reasons[base] = self._classify(base)
             self._memo[key] = None
             return None
+        self.reasons.pop(base, None)
         best = min(cands, key=lambda r: (r.cost, TIE_BREAK[r.kind], r.render()))
         self._memo[key] = best
         return best
@@ -247,12 +284,13 @@ def _ctx_tokens(ctx: Context, est: Callable[[str], int]) -> int:
 
 def expand(index: Index, demands: list[Need], task, budget_files: int = DEFAULT_BUDGET_FILES,
            budget_tokens: int = DEFAULT_BUDGET_TOKENS, d_max: int = DEFAULT_D_MAX,
-           est_tokens: Optional[Callable[[str], int]] = None) -> ExpansionResult:
+           est_tokens: Optional[Callable[[str], int]] = None, expand_past: int = 0) -> ExpansionResult:
     est = est_tokens or packet_mod.est_tokens
     C, m = find_focal(index, task)
     ctx = Context(types={erase(C.fqn)}, files={C.file} if C.file else set())
-    resolver = Resolver(index, d_max=d_max)
+    resolver = Resolver(index, d_max=d_max, test_package=C.package or None)
     unresolvable: dict[str, Need] = {}
+    reasons: dict[str, str] = {}
     trace: list[str] = []
     ent_ids = {id(e) for e in ctx.entities}
 
@@ -292,6 +330,7 @@ def expand(index: Index, demands: list[Need], task, budget_files: int = DEFAULT_
                 r = resolver.resolve(n.type, 0)  # resolved over the WHOLE index
                 if r is None:
                     unresolvable[n.key()] = n
+                    reasons[n.key()] = resolver.reasons.get(erase(n.type), "no_path")
                     continue
                 ctx.recipes[n.key()] = r
                 step_files = set()
@@ -311,11 +350,13 @@ def expand(index: Index, demands: list[Need], task, budget_files: int = DEFAULT_
                 if n.detail == "interaction":
                     if index.project.get("mocking_lib", "none") == "none":
                         unresolvable[n.key()] = n
+                        reasons[n.key()] = "no_mocking_lib"
                     continue
                 if n.detail == "exception":
                     t = index.type(tau)
                     if t is None:
                         unresolvable[n.key()] = n  # non-JDK exception type not in the index
+                        reasons[n.key()] = "offindex"
                     else:
                         add_type(tau)
                         if t.file and t.file not in ctx.files:
@@ -326,6 +367,7 @@ def expand(index: Index, demands: list[Need], task, budget_files: int = DEFAULT_
                     obs = index.observables(tau)[:6]
                     if not obs:
                         unresolvable[n.key()] = n
+                        reasons[n.key()] = "no_observable"
                     else:
                         new_files = [o.file for o in obs if o.file and o.file not in ctx.files]
                         if absorb(obs):
@@ -335,6 +377,7 @@ def expand(index: Index, demands: list[Need], task, budget_files: int = DEFAULT_
             elif n.kind == "idiom":
                 if not index.project.get("test_framework"):
                     unresolvable[n.key()] = n
+                    reasons[n.key()] = "no_framework"
             if len(ctx.files) >= budget_files:
                 break
         if not changed:
@@ -344,6 +387,7 @@ def expand(index: Index, demands: list[Need], task, budget_files: int = DEFAULT_
     status = "sufficient" if ok and not unresolvable else "fallback"
     referable: list = []
     diffs: dict = {}
+    extended = 0
     if status == "fallback":  # demand-proximal backstop (§2.5.1): ranked by overlap with D, not by "calls m"
         ranked = proximal.rank(index, task, demands, k=2)
         referable = [d.test for d in ranked]
@@ -351,5 +395,62 @@ def expand(index: Index, demands: list[Need], task, budget_files: int = DEFAULT_
         for t in referable:
             if t.file:
                 ctx.files.add(t.file)
+    elif expand_past > 0:  # §2.5 continuation rule: deterministic, prefix-closed, so Σ+2 ⊆ Σ+4
+        extended = _continue_past(index, demands, task, ctx, resolver, expand_past, absorb, add_type,
+                                  trace, referable, diffs)
     return ExpansionResult(ctx=ctx, status=status, unresolved=unresolved_final, trace=trace,
-                           referable_tests=referable, referable_diffs=diffs)
+                           referable_tests=referable, referable_diffs=diffs,
+                           unresolved_reasons=reasons, extended_by=extended)
+
+
+def _continue_past(index: Index, demands, task, ctx: Context, resolver: Resolver, k: int,
+                   absorb, add_type, trace: list, referable: list, diffs: dict) -> int:
+    """Continuation past Σ (§2.5): (1) the cheapest unused alternative recipe per construction need, in D
+    order; (2) observables beyond the first six for return/state oracle needs; (3) demand-proximal tests.
+    Adds whole entities until at least k were added; the sequence is fixed, so packets are nested."""
+    added = 0
+    ent_ids = {id(e) for e in ctx.entities}
+    for n in demands:
+        if added >= k:
+            break
+        if n.kind not in ("receiver", "arg", "setup") or is_literal(n.type):
+            continue
+        chosen = ctx.recipes.get(n.key())
+        cands = sorted(resolver.candidates(erase(n.type), 0), key=lambda r: (r.cost, TIE_BREAK[r.kind], r.render()))
+        for r in cands:
+            if chosen is not None and r.render() == chosen.render():
+                continue
+            new = [e for e in r.entities() if id(e) not in ent_ids]
+            if not new:
+                continue
+            absorb(r.entities())
+            ent_ids.update(id(e) for e in r.entities())
+            for e in r.entities():
+                o = getattr(e, "owner", None)
+                if o:
+                    add_type(o)
+            trace.append(f"past-Σ {n.key()} <- alt {r.kind}:{r.render()}")
+            added += len(new)
+            break
+    for n in demands:
+        if added >= k:
+            break
+        if n.kind != "oracle" or n.detail not in ("return", "state"):
+            continue
+        for o in index.observables(erase(n.type))[6:]:
+            if added >= k:
+                break
+            if id(o) not in ent_ids and absorb([o]):
+                ent_ids.add(id(o))
+                trace.append(f"past-Σ {n.key()} <- observable {o.name}")
+                added += 1
+    if added < k:
+        for d in proximal.rank(index, task, demands, k=k - added):
+            if all(t.id != d.test.id for t in referable):
+                referable.append(d.test)
+                diffs[d.test.id] = d
+                if d.test.file:
+                    ctx.files.add(d.test.file)
+                trace.append(f"past-Σ related <- {d.test.id}")
+                added += 1
+    return added

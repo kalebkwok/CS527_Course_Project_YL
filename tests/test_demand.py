@@ -48,6 +48,52 @@ class DemandTest(unittest.TestCase):
         self.assertIn("oracle:com.mini.WheelImpl:state", keys)  # row 3: void method, no keywords
         self.assertIn("setup:com.mini.Wheel:delegate", keys)
 
+    def test_negated_exception_cue_is_not_an_exception_oracle(self):
+        task = mini_task()
+        task.intention = {"objective": "process accepts a positive delta", "preconditions": "",
+                          "expected_results": "process does not throw and returns the updated size"}
+        keys = [n.key() for n in demand.compute_demands(self.index, task)]
+        self.assertNotIn("oracle:java.io.IOException:exception", keys)
+        self.assertIn("oracle:int:return", keys)
+        # a positive cue elsewhere in the sentence still counts
+        task.intention["expected_results"] = "process throws IOException for a negative delta and does not throw otherwise"
+        keys = [n.key() for n in demand.compute_demands(self.index, task)]
+        self.assertIn("oracle:java.io.IOException:exception", keys)
+
+    def test_objective_is_the_cue_source_when_expected_results_is_empty(self):
+        task = mini_task()
+        task.intention = {"objective": "process rejects a negative delta with an exception", "preconditions": "",
+                          "expected_results": ""}
+        keys = [n.key() for n in demand.compute_demands(self.index, task)]
+        self.assertIn("oracle:java.io.IOException:exception", keys)
+
+    def test_semantic_gaps_zero_on_the_fixture_task(self):
+        gaps = demand.compute_gaps(self.index, self.task)
+        self.assertEqual(gaps["counts"], {"relational": 0, "state": 0, "unbound": 0, "same_type_args": 0})
+        self.assertEqual(gaps["total"], 0)
+
+    def test_semantic_gaps_relational_state_unbound(self):
+        task = mini_task()
+        task.intention = {"objective": "o", "expected_results": "returns",
+                          "preconditions": "n must be smaller than the length of bar. "
+                                           "The store already contains one entry. "
+                                           "The moon is full."}
+        gaps = demand.compute_gaps(self.index, task)
+        self.assertEqual(gaps["counts"]["relational"], 1)
+        self.assertEqual(gaps["relations"][0]["params"], ["bar", "n"])
+        self.assertEqual(gaps["counts"]["state"], 1)   # mentions field `store` / "already contains"
+        self.assertEqual(gaps["counts"]["unbound"], 1)
+        self.assertEqual(gaps["total"], 3)
+
+    def test_semantic_gaps_same_type_args(self):
+        from demandtest.index import Method, Param
+        foo = self.index.type("com.mini.Foo")
+        foo.methods.append(Method(name="merge", params=[Param("a", "com.mini.Bar"), Param("b", "com.mini.Bar")],
+                                  returns="int", owner="com.mini.Foo"))
+        task = mini_task()
+        task.focal_method, task.focal_sig = "merge", "merge(Bar,Bar)"
+        self.assertEqual(demand.compute_gaps(self.index, task)["counts"]["same_type_args"], 1)
+
     def test_keys_are_unique(self):
         keys = [n.key() for n in demand.compute_demands(self.index, self.task)]
         self.assertEqual(len(keys), len(set(keys)))

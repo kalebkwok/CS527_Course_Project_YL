@@ -1,6 +1,6 @@
 [project]
 name = "demandtest"
-version = "0.2.3"
+version = "0.2.4"
 description = "Demand-driven static discovery of project-specific knowledge for efficient, intention-aligned unit test generation."
 requires-python = ">=3.10"
 # Stdlib only (SPEC §3); tiktoken is optional for packet token estimation.

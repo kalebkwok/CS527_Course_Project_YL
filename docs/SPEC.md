@@ -1,6 +1,6 @@
 # DemandTest — Design and Implementation Specification
 
-Version 0.2.3 (2026-09-22; 0.2.2 same day, 0.2.1 was 2026-09-14). Status: S0–S5 implemented against this spec (§12 indexer row green
+Version 0.2.4 (2026-09-22; 0.2.3 and 0.2.2 same day, 0.2.1 was 2026-09-14). Status: S0–S5 implemented against this spec (§12 indexer row green
 on the 3-file sample; first real index: cron-utils `bac6e86`); baselines/eval pending. Owner: Kaleb Guo.
 Audience: whoever (human or model) implements the code. Nothing in this repo
 is implemented yet; this document is the contract. Sections marked **MUST**
@@ -43,6 +43,22 @@ executed, splits accounting into index / online / generation / execution with fi
 amortized time, adds budget sweeps and a compact-static-context baseline, redesigns RQ5 as a
 same-task stopped-vs-extended comparison, and predefines a non-inferiority margin. The pilot
 that decides whether the full evaluation is worth running is in `docs/PILOT.md`.
+
+**0.2.4 changes** (second review round, 2026-09-22; code and documentation): the *final-packet
+invariant* (§2.4.6): Σ is claimed only for evidence the model receives, and every run carries one of
+four statuses computed on the rendered packet (`sufficient`, `sufficient-with-gaps`,
+`budget-limited`, `fallback`), stored in `results.packet_status`. §2.2 is the single authoritative
+rule for oracle cues (source, negation, precedence). S1 records the semantic-gap flags of §2.4.1.
+Package-private constructors and factories are usable only from the focal package; every
+unresolvable need carries an `unresolved_reason`. §2.5 defines the deterministic continuation rule
+behind `--expand-past k`, so Σ ⊆ Σ+2 ⊆ Σ+4 are nested by construction, and the full class is a
+representation ablation, not the top of that nesting. §11 separates the *selection* experiment
+(selectors at fixed allowances, common stopping) from the *stopping* experiment (fixed selector,
+varied stopping), adds the controlled selector comparison and the intention-sensitivity measure,
+gives the non-inferiority margin a rationale with sensitivity at tighter margins, treats the pilot's
+three projects as fixed case studies, and replaces go/no-go with proceed / redesign / inconclusive.
+§8.3 uses IntentionTest's "no more than five code tokens"; §10.3 is labeled a simplified
+retrieve-and-edit baseline.
 
 ---
 
@@ -97,7 +113,18 @@ Need := Receiver(C)                       -- unless m is static or a constructor
       | Idiom(test_framework, assertion_lib, mocking_lib)
 ```
 
-Oracle rules (regex over `I.expected_results`, case-insensitive):
+Oracle rules, the single authoritative definition (S1, `demand.oracle_cue_text`):
+
+- **Source.** Cues are matched against `I.expected_results`; when it is empty, against
+  `I.objective`. The objective is never scanned when expected results exist.
+- **Negation.** Before matching, every negated cue is removed: a negation word (`not`, `never`,
+  `no`, `without`, `neither`, `nor`) followed within three words by a cue word (`throw…`,
+  `exception…`, `error…`, `fail…`, `reject…`, `raise…`). "does not throw" therefore yields no
+  exception need; "throws for a negative delta and does not throw otherwise" still does.
+- **Precedence.** Rows are applied in order: an exception cue suppresses the return row; the state
+  row applies when the method is void or a state cue is present; the interaction row is additive.
+
+Regexes over the cue text, case-insensitive:
 
 | pattern in expected_results | needs added |
 |---|---|
@@ -170,7 +197,8 @@ files those entities live in, and a map `need → recipe`.
 
 | Intention content | What S1 derives | Bound by Σ? |
 |---|---|---|
-| Objective only | Receiver, Arg (unconstrained), Setup, one oracle need from the objective's cues; with no cue: `return` if `m` is non-void, else `state` | yes (structurally) |
+| Objective only (expected results empty) | Receiver, Arg (unconstrained), Setup; oracle needs from the objective's cues under the §2.2 rule; with no cue: `return` if `m` is non-void, else `state` | yes (structurally) |
+| Negated cue ("does not throw", "without error") | the negated cue is removed before matching (§2.2) | n/a |
 | Precondition sentence naming one parameter (by name, or by simple type name when unique among the parameters) | `Arg.constraint = sentence` | no: rendered verbatim on the arg line |
 | Precondition sentence naming two or more parameters | `Relation(i, j, sentence)` | no: rendered verbatim; flag `relational` |
 | Precondition describing receiver or collaborator state ("the account has balance 100") | `StateHint(sentence)` | no: rendered verbatim; flag `state` |
@@ -187,8 +215,13 @@ sees what Σ could not bind. Two or more parameters sharing one non-literal type
 `Need = (kind, tau, detail, constraint, relations)`. Evidence that a need is satisfied:
 
 - **Receiver / Arg / Setup(tau)**: a recipe `r` with `entities(r) ⊆ ctx.entities` and every leaf
-  resolved (a leaf is a Literal, Fixture, Singleton, Mock, or a parameterless Ctor/Factory/Helper).
-  A literal `tau` is its own evidence.
+  resolved (a leaf is a Literal, Fixture, Singleton, Mock, or a parameterless Ctor/Factory/Helper),
+  and every constructor or factory on the path **accessible from the focal package** (public, or
+  package-private in the package the generated test is written to, §2.8.1). A literal `tau` is its
+  own evidence. What this establishes is that *a candidate construction pattern is available*, not
+  that every value is obtainable: a Fixture leaf may depend on lifecycle methods, helpers, or
+  resources the packet does not show, and an erased generic parameter (`T`) is an explicit
+  `generic_erased` outcome, never a satisfied need.
 - **Oracle(return, tau)**: `tau` literal or JDK, or an observable of `tau` in `ctx.entities`.
   Existence of *an* observable, not the right one.
 - **Oracle(exception, tau)**: `tau` JDK, or `tau ∈ ctx.types`. Only visibility of the type;
@@ -211,23 +244,48 @@ sees what Σ could not bind. Two or more parameters sharing one non-literal type
 #### 2.4.4 Boundary: structural completeness vs semantic uncertainty
 
 Σ = structural completeness. The S1 checkpoint records `semantic_gaps = {relational, state,
-unbound, same_type_args}` with counts. A run is reported as `sufficient` (Σ holds, all counts 0),
-`sufficient-with-gaps` (Σ holds, some count > 0), or `fallback`. RQ5 (§11) stratifies by these
-three statuses and by the manual missing-fact analysis; a `sufficient-with-gaps` run that fails
-is not evidence against Σ, and a `sufficient` run that fails is.
+unbound, same_type_args}` with counts and the relational sentences. Zero counts mean **no
+detected** semantic gaps, not their absence: S1 detects only the forms of §2.4.1. Two things are
+reported separately and never conflated: (a) *structural witness validity*, whether the evidence
+Σ points to is in fact usable (measured by the manual missing-fact analysis of §11 on failed runs
+from every status), and (b) *downstream predictive usefulness*, aligned success stratified by
+status. A failure in any status can come from missing context, bad generation, or repair; the
+manual classification, not the status, attributes it.
 
 #### 2.4.5 Index scope (S0) and unresolved-reason accounting
 
-Supported construction paths: public and package-private constructors; static factories returning
-`tau` or a subtype; builders; static fields including enum constants; subtype constructors for
-interface/abstract `tau`; fixture fields and helper methods in existing tests; Mockito-style mocks.
-Not supported, and recorded per unresolvable need as `unresolved_reason ∈ {no_path, cycle,
-depth, di_constructed, reflection, resource_file, inherited_factory_offindex, generic_erased}`:
-types constructed by a DI container (no constructor path in the index), reflection-created types,
-types needing resource files, factories inherited from types outside the index classpath, and
-generic type arguments (erased, OPEN 1). §11 reports the distribution of reasons; JavaParser with
-the symbol solver is the starting point, not a complete resolver, and this table is the measured
-boundary.
+Supported construction paths: public constructors and package-private constructors in the focal
+package; static factories returning `tau` or a subtype; builders; static fields including enum
+constants; subtype constructors for interface/abstract `tau`; fixture fields and helper methods in
+existing tests; Mockito-style mocks. Every unresolvable need carries `unresolved_reason`, emitted
+by S2 (`expand.py`): `cycle`, `depth`, `generic_erased` (an erased type parameter such as `T`),
+`jdk_no_recipe` (a JDK type with no literal form), `offindex` (a type outside the index, including
+a non-JDK exception type), `inaccessible` (only package-private paths from another package),
+`no_path` (in the index, no accessible constructor, factory, builder, singleton, fixture, or
+helper), `no_observable`, `no_mocking_lib`, `no_framework`. Types constructed by a DI container,
+by reflection, or from resource files are not detectable statically and appear only as
+`no_path`; the manual analysis of §11 labels them `di_constructed`, `reflection`, `resource_file`.
+§11 reports the distribution. JavaParser with the symbol solver is the starting point, not a
+complete resolver, and this table is the measured boundary.
+
+#### 2.4.6 Final-packet invariant (MUST)
+
+Σ is evaluated over `ctx`, but the model receives the rendered packet, which the token budget may
+have cut. Σ is therefore **claimed only for evidence that survives rendering**. `packet.final_status`
+computes, on the rendered packet, exactly one of:
+
+| status | meaning |
+|---|---|
+| `fallback` | Σ failed structurally (§2.5) |
+| `budget-limited` | Σ held over `ctx`, but section 4 was dropped while a non-literal return/state oracle needed an observable, or the protected sections alone exceed `B_tokens` |
+| `sufficient-with-gaps` | Σ holds on the rendered packet; S1 recorded at least one semantic gap |
+| `sufficient` | Σ holds on the rendered packet; no semantic gap detected |
+
+The status is stored in `results.packet_status` and every quality metric is reported by status.
+Construction evidence lives in section 3, which is never dropped; oracle evidence lives in section 4,
+which is the last droppable section. Budget enforcement uses the packet estimator (`tiktoken`
+cl100k when available, else `len/3.6`); the provider's usage object remains the accounting source,
+and the estimator's error is reported once per model on the pilot.
 
 ### 2.5 Bounded expansion (S2)
 
@@ -248,11 +306,19 @@ loop while ¬Σ(D, ctx) ∧ |ctx.files| < B_files ∧ est_tokens(ctx) < B_tokens
             else: ctx.entities += obs; ctx.files += files(obs); ctx.types += {tau}; progressed := true
         if |ctx.files| ≥ B_files: break
     if ¬progressed: break
-status := "sufficient"  if Σ(D, ctx) ∧ unresolvable = ∅
-          "fallback"    otherwise
-if status = "fallback":                                   -- demand-proximal backstop (§2.5.1)
+structural := "sufficient"  if Σ(D, ctx) ∧ unresolvable = ∅
+              "fallback"    otherwise
+if structural = "fallback":                               -- demand-proximal backstop (§2.5.1)
     ref := rank(D, candidates(m, C))[:2]                   (excluding the task's reference test)
     ctx.files += files(ref); packet gains their source (≤ 40 lines each) and their demand diff
+elif expand_past = k > 0:                                 -- continuation rule, RQ5 (deterministic)
+    added := 0
+    (1) for n in D (construction needs, non-literal, in order): the cheapest *unused* alternative
+        recipe of n.tau (same ordering as resolve); absorb its entities; added += |new entities|
+    (2) for n in D (return/state oracle needs): observables(tau)[6:], one at a time
+    (3) demand-proximal tests by rank, added to the related tests
+    stop as soon as added ≥ k; the sequence is fixed, so ctx(Σ+2) ⊆ ctx(Σ+4) by construction
+final status := packet.final_status(...)  after rendering (§2.4.6): the ONLY status a run carries
 trace := one line per step: "<need> <- <recipe kind>:<rendered> (+files=[...])"
 ```
 
@@ -317,6 +383,11 @@ tail once `B_tokens` is exceeded (sections 1–3 and 5 are never dropped; §12 i
 7. `RELATED EXISTING TEST …` — only in `fallback` status, ≤ 40 lines each, headed by
    its demand diff: `// satisfies: receiver (Foo), arg0 (Bar) | missing: oracle/exception
    (IOException): assert that the documented exception is thrown`.
+
+Budget policy: sections are dropped from the tail (7, 6, 4) until the estimator is within
+`B_tokens`; the dropped keys and whether the protected sections still exceed the budget are
+recorded on the `Packet`, and §2.4.6 turns them into the run's status. Section 7 is rendered
+whenever related tests exist (fallback, or continuation past Σ).
 
 Rendered recipes: `new Foo(<literal int>, <literal String>)`,
 `Foo.of(...)`, `Foo.builder()...build()`, `Foo.INSTANCE`, `mock(Foo.class)`.
@@ -500,16 +571,20 @@ demand.py
   @dataclass(frozen) Need(kind, type, detail="", constraint="")  ; Need.key() -> "kind:type:detail"
   @dataclass Task(repo, focal_class, focal_method, focal_sig, focal_file, intention: dict, ref_test_id, id=None)
   find_focal(index, task) -> (TypeInfo, Method)  # KeyError if absent
-  compute_demands(index, task) -> list[Need]     # §2.2
+  compute_demands(index, task) -> list[Need]     # §2.2 (oracle_cue_text: source, negation, precedence)
+  compute_gaps(index, task) -> {counts, relations, total}   # §2.4.1 semantic-gap flags
 
 expand.py
   @dataclass Recipe(kind, type, cost, entity=None, sub=[]) ; .entities() ; .render()
   @dataclass Context(types:set, entities:list, files:set, recipes:dict)
   class Resolver(index, d_max=3): candidates(fqn) -> list[Recipe] ; resolve(fqn, depth=0) -> Recipe | None
   sufficient(index, demands, ctx) -> (bool, unresolved: list[Need])   # §2.4
-  expand(index, demands, task, budget_files=12, budget_tokens=2000, d_max=3, est_tokens=callable)
+  class Resolver(index, d_max=3, test_package=None): … ; .reasons {erased type: unresolved_reason}
+  expand(index, demands, task, budget_files=12, budget_tokens=2000, d_max=3, est_tokens=callable,
+         expand_past=0)
       -> ExpansionResult(ctx, status: "sufficient"|"fallback", unresolved, trace: list[str],
-                         referable_tests, referable_diffs: {test_id: DemandDiff})
+                         referable_tests, referable_diffs: {test_id: DemandDiff},
+                         unresolved_reasons: {need_key: reason}, extended_by: int)
 
 proximal.py                                      # §2.5.1, no LLM
   diff(index, task, demands, test) -> DemandDiff(test, satisfied, missing, calls_focal, score)
@@ -522,7 +597,9 @@ trigger.py                                       # §2.6 item 3, no LLM
 
 packet.py
   est_tokens(text) -> int
-  render(index, task, demands, expansion, focal_source, budget_tokens) -> Packet(text, est_tokens, sections: dict)
+  render(index, task, demands, expansion, focal_source, budget_tokens)
+      -> Packet(text, est_tokens, sections, dropped: list[str], over_budget: bool)
+  final_status(demands, expansion, packet, gaps) -> "sufficient"|"sufficient-with-gaps"|"budget-limited"|"fallback"
 
 llm.py
   class LLMClient(model, conn, run_id, base_url=$DEMANDTEST_BASE_URL, api_key=$DEMANDTEST_API_KEY,
@@ -555,6 +632,7 @@ metrics.py
                             call_success, wall_s, files_per_task)
   pareto(conn)    -> rows (demandtest configs: pass_rate, aligned_pass_rate vs tokens_per_task)
   budget_curve(conn, points=10) -> rows (per system×model: runs, cum_tokens, cum_passed, pass_rate)
+  by_status(conn)  -> rows (per system×model×packet_status: n, compile_rate, pass_rate, aligned_pass_rate, tokens)
   format_table(rows) -> markdown
 
 cli.py   see §7.  run_one(conn, repo_row, task, args): S1→S5 with a checkpoint after each stage;
@@ -588,7 +666,8 @@ CREATE TABLE file_access(run_id INTEGER NOT NULL REFERENCES runs(id), path TEXT 
 CREATE TABLE results(run_id INTEGER PRIMARY KEY REFERENCES runs(id), compiled INTEGER, passed INTEGER,
   n_asserts INTEGER, mutation_score REAL, alignment_score REAL, wall_ms INTEGER, inspected_files INTEGER,
   prompt_tokens INTEGER, completion_tokens INTEGER, n_llm_calls INTEGER, test_path TEXT, notes TEXT,
-  target_hit INTEGER);                                    -- 0.2.2; init_schema ALTERs older ledgers
+  target_hit INTEGER,                                     -- 0.2.2; init_schema ALTERs older ledgers
+  packet_status TEXT);                                    -- 0.2.4; §2.4.6 status of the rendered packet
 ```
 
 `config_hash` = sha256 of the canonical JSON of the run config, 12 hex chars.
@@ -622,6 +701,7 @@ demandtest run          --db … --repo cron-utils --system demandtest --model <
                         [--repeat K] [--limit N] [--force] [--dry-run] [--keep]
                         # --repeat K (K ≥ 1) enters the config, so each K is a distinct run (§11 variance)
                         # --refine 2 is the repair-cap pilot only (§2.9)
+                        [--expand-past K]   # RQ5 continuation past Σ (§2.5); K enters the config
 demandtest report       --db …            # prints summarize() and pareto() as markdown
 ```
 
@@ -672,7 +752,7 @@ developer would have stated BEFORE writing this test, as JSON with keys:
 "objective" (≤ 50 words: what requirement scenario is validated),
 "preconditions" (optional: state/inputs required before invoking the focal method),
 "expected_results" (optional: verifiable behavior). preconditions + expected_results ≤ 200 words.
-Use natural language; do not quote code (fewer than 5% of tokens may be identifiers).
+Use natural language; do not quote code (the whole description may contain no more than five code tokens).
 ```
 
 ---
@@ -742,13 +822,15 @@ that aggregate performance cannot be explained by adapting near-identical tests.
 
 ### 10.2 SWE-agent (secondary, time permitting): same protocol.
 
-### 10.3 IntentionTest-style (re-implemented on the harness)
+### 10.3 IntentionTest-style: a *simplified* retrieve-and-edit baseline (re-implemented on the harness)
 
 Embedding retrieval (CodeT5+ or any local embedding model) of the top-1
 referable test by intention+signature similarity; prompt = full focal class
 + full referable test file + intention; up to 4 LLM refinement rounds each
 fed the full test and the full failure output. Same ledger. This isolates
-"demand-driven packet + static repair" from "retrieve-and-edit".
+"demand-driven packet + static repair" from "retrieve-and-edit". It omits IntentionTest's
+crucial-fact discrimination stage and is labeled *simplified* everywhere unless that stage is
+reproduced; it is never presented as IntentionTest.
 
 ---
 
@@ -768,15 +850,15 @@ aligned_success = (compiled ∧ passed ∧ focal_executed ∧ judge = 2) / attem
 `focal_executed` is **dynamic**: the focal method's lines show non-zero coverage in a JaCoCo run
 of the generated test (a static call reference may be unreachable or mocked; `target_hit` of
 §2.8.5 stays as the cheap static proxy and is reported next to it). `judge = 2` is the top level
-of the 0–2 alignment rubric. Aligned-given-pass is a diagnostic, never the headline: alone it can
-hide a system that is aligned only on a small, easy subset.
+of the 0–2 alignment rubric. Aligned-given-pass is a diagnostic, never the headline.
 
 **Other metrics per task (from the ledger):** `compiled`, `passed`, `target_hit`,
 `focal_executed`, `n_asserts`, `mutation_score` (PIT restricted to the focal method's lines, on a
-sampled subset; intention-relevant mutants where feasible), `alignment_score` (0–2), tokens
-(provider usage, never estimated), calls, `inspected_files_online`, cost per aligned test,
-`repair_weakened` (after S5: assertions fewer, oracle evidence lost, or `target_hit` dropped;
-strict variant counts such runs as failures), and `semantic_gaps` / `unresolved_reason` (§2.4).
+sampled subset), `alignment_score` (0–2), tokens (provider usage, never estimated), calls,
+`inspected_files_online`, cost per aligned test, `repair_weakened` (after S5: assertions fewer,
+oracle evidence lost, or `target_hit` dropped; the strict variant counts such runs as failures),
+`packet_status` (§2.4.6), `semantic_gaps` and `unresolved_reason` (§2.4). Every quality metric is
+reported by `packet_status` and by the clone-available split (§9).
 
 **Accounting (MUST).** Report separately, with the same boundaries and cache assumptions for
 every system, and with failed attempts included in every total:
@@ -790,58 +872,89 @@ every system, and with failed attempts included in every total:
 | Incremental index update | not implemented in v1; stated | n/a |
 
 Time per task is reported both **first-use** (`index_time + online_time`) and **amortized**
-(`index_time / tasks_on_repo + online_time`). The phrase "opens a file only when a need requires
-it" refers to the online bucket only.
+(`index_time / tasks_on_repo + online_time`). "Opens a file only when a need requires it" refers
+to the online bucket only. Context sizes are compared under a **common allowance** `B_t`, never
+described as "the same size": DemandTest stops early, other conditions fill or truncate. All
+variable context counts toward the allowance, including the idiom example, trigger hints, and
+related tests.
 
-**Baselines (minimum persuasive set).**
-1. OpenHands headless, same model, at **three iteration budgets** (10 / 30 / 60), after checking
-   that the chosen open-weight model drives its tools competently on five tasks.
-2. IntentionTest: a faithful reimplementation on the harness, clearly labeled as such.
-3. **Compact static context (CSC)**: focal method plus the signatures of directly referenced
-   types and the class's fields, cut to the same `B_t`, with the *same* generator and repair
-   policy. This isolates "signatures and few calls" from "typed demands".
-4. DemandTest ablations, same generator and repair: `−I` (demands from types only, intention text
-   still in the packet); `fixed` (expansion to `B_f`, `B_t` without the stopping rule);
-   `embed` (embedding retrieval at the same budget); tie-break swapped; trigger `returns:` hint
-   off (implementation-leakage check).
+**Two experiments, not one (RQ3 and RQ5).**
+
+*Selection (RQ3).* Same candidate evidence pool (every entity reachable by expansion, every
+observable, every visible test), same rendering (the packet template including a HOW TO OBTAIN
+section), same auxiliary policy (example and hints on or off for all arms alike), same generator
+and repair. Only the **selector** changes, at several fixed allowances with a common stopping
+policy (fill to the allowance):
+- `obligation` (DemandTest's demand-driven resolution and expansion order),
+- `similarity` (rank the same pool by embedding or BM25 similarity to intention + focal signature),
+- `dependency` (rank the same pool by reference distance from the focal method, as fixed expansion does).
+DemandTest vs the whole-system compact static-context (CSC) baseline stays as a *whole-system*
+comparison; CSC renders its signatures under the same HOW TO OBTAIN heading so the shared prompt
+applies to it, and any DT win there may come from recipes, fixtures, hints, example, or fallback
+tests, which the selector experiment separates.
+
+*Stopping (RQ5).* Selector fixed to `obligation`; stopping policy varies over genuinely nested
+packets `ctx(Σ) ⊆ ctx(Σ+2) ⊆ ctx(Σ+4)` produced by the §2.5 continuation rule, plus `fixed`
+(fill to `B_t`). **Σ+4 is the preselected primary comparator**; Σ+2 is secondary. Replacing the
+packet by the full focal class is a separate *representation* ablation, not the top of this
+nesting, because the full class is not a superset of a packet that holds external factories,
+fixtures, and helpers. The manual missing-fact analysis (30 `sufficient`-but-failed, 30
+`sufficient-with-gaps`-or-`budget-limited`-but-failed, 30 `fallback`) classifies each failed run
+as premature stop, intention-binding failure, generation failure with adequate context, or repair
+failure, blind to condition.
+
+*Intention dependence.* Recipe resolution is type-driven; the intention drives cue extraction,
+constraint annotation, oracle-kind selection, and related-test ranking. Report
+**intention sensitivity**: the fraction of tasks where replacing the intention (objective-only,
+or the paired independently written intention) changes the selected entity set. `−I` therefore
+measures cue extraction and annotation, not intention-specific retrieval, and is labeled so.
+
+**Baselines (minimum persuasive set).** OpenHands headless, same model, at three iteration
+budgets (10 / 30 / 60) after a tool-competence check on five tasks; the simplified IntentionTest
+retrieve-and-edit reimplementation (§10.3), labeled; CSC; the DemandTest ablations of the two
+experiments above; tie-break swapped; trigger `returns:` hint off.
 
 **Research questions.**
-- RQ1 quality: aligned success rate of DemandTest vs each baseline, per project and pooled.
-  *Comparable quality* is predefined as **non-inferiority within 5 points absolute** of
-  OpenHands-30, with 95 % bootstrap confidence intervals over tasks; a non-significant difference
-  is not parity.
+- RQ1 quality: aligned success of DemandTest vs each baseline. *Comparable quality* is
+  **non-inferiority**: `d = p_DT − p_OH30`, claimed when the lower 95 % confidence bound on `d`
+  exceeds −0.05. Rationale for five points: the intended use is a first-draft generator that a
+  developer reviews, and the token and time savings R3 asks for are worth five reviewed drafts per
+  hundred that need more work; sensitivity is reported at −0.03 and −0.02, and the margin is never
+  chosen to fit the sample. Five points is an engineering tradeoff, stated as such.
 - RQ2 efficiency: tokens, first-use and amortized time, online files, vs the R3 thresholds, at
   every agent budget.
-- RQ3 mechanism: DemandTest vs CSC and vs `fixed` **at the same context budget**. This is the
-  claim that obligations select context better than similarity ranking or fixed expansion.
+- RQ3 selection, RQ5 stopping: as above.
 - RQ4 sensitivity: model size; objective-only intentions; independently written intentions;
-  clone-available vs clone-free strata.
-- RQ5 stopping rule, **same tasks**: stop at Σ vs continue past Σ by `k` entities
-  (`--expand-past k`, k ∈ {2, 4}) vs full class. Plus a manual missing-fact analysis on 30
-  `sufficient`-but-failed and 30 `fallback` tasks, classifying each as premature stop, binding
-  failure, generation failure with adequate context, or repair failure. Comparing `sufficient`
-  against `fallback` tasks alone is not evidence of predicate accuracy.
+  clone-available vs clone-free; intention sensitivity.
 
-**Statistics.** Paired comparisons at task level; bootstrap confidence intervals clustered by
-project; per-project tables; the Pareto figure shows every agent budget and DemandTest
-configuration with interval bars, not one point per system.
+**Statistics.** Paired at task level with the pairing preserved in every resampling; tasks that
+share a focal method are one unit. In the pilot the three projects are **fixed case studies**,
+reported separately, with no cluster bootstrap (three clusters cannot support one); generalization
+across projects is claimed only in the full evaluation, whose sample is planned from the pilot's
+observed paired disagreement rate `q` (planning approximation `SE(d) ≈ sqrt(q / n)`; with q = 0.10
+about 314 pairs for 80 % power at a five-point margin) and project heterogeneity. Confidence
+intervals for the full evaluation cluster by project only with enough projects to do so. The
+Pareto figure shows every agent budget and DemandTest configuration with interval bars.
 
 **Human evaluation.** Two separate samples: (a) intention validation (§9, 10 %, κ reported);
-(b) judge validation: blinded ratings of generated tests drawn across systems and projects,
-100 tests stratified by system, two raters, κ reported, and the judge's agreement with the human
-majority reported before the judge's numbers are used.
+(b) judge validation: blinded ratings of generated tests, two raters, **a third rater adjudicates
+disagreements**, κ reported; the sample prioritizes *paired* DT/CSC outputs on the same tasks so
+that system-dependent judging errors can be inspected, and the judge's agreement with the
+adjudicated label is reported before any judge-based number is used.
 
 **Variance protocol.** Every configuration runs once over the full task set. Three projects,
-chosen in advance to differ in size and dependency profile (builder-heavy, fixture-heavy,
-interface/mocking-heavy), additionally run ten times with `--repeat 1..10`; report the maximum
-standard deviation of aligned success and whether the system ranking holds in every repeat.
+chosen in advance to differ in size and dependency profile, additionally run ten times with
+`--repeat 1..10`; report the maximum standard deviation of aligned success and whether the
+ranking holds in every repeat.
 
 **Repair-cap pilot.** On the pilot projects run `--refine 2` and report the marginal
 aligned-success gain of the second round against its extra tokens. The cap of §2.9 stays at 1
 unless the second round adds ≥ 2 points for ≤ 10 % extra tokens.
 
-**Go/no-go.** The pilot in `docs/PILOT.md` runs before the full evaluation and decides whether it
-is worth running.
+**Pilot decisions.** `docs/PILOT.md` decides *proceed*, *redesign*, or *inconclusive* per
+question; an inconclusive interval triggers sample planning or a narrower claim, never automatic
+redesign. After the pilot the design is frozen and confirmatory evaluation uses held-out tasks and
+projects.
 
 ---
 
@@ -869,6 +982,10 @@ All tests run offline, no LLM, no Java toolchain, on a hand-written fixture
 | `db` (migration) | `init_schema` on a ledger created without `target_hit` adds the column and stays idempotent; `finish_run` stores `target_hit`. |
 | `metrics` | `summarize` exposes `target_hit_rate`, `aligned_pass_rate`, `call_success` with the expected values on a seeded ledger; `budget_curve` is cumulative and sampled at ≤ `points` runs. |
 | `cli` (0.2.2) | The S4 checkpoint and `results` carry `target_hit`; `--repeat 1` creates a second run with a different `config_hash`; `--refine 3` is rejected; `report` prints the budget curve. |
+| `demand` (0.2.4) | "does not throw" yields no exception need while "throws … and does not throw otherwise" still does; an empty expected-results field makes the objective the cue source; `compute_gaps` is all-zero on the fixture task and counts one relational, one state, one unbound sentence on a crafted intention, and `same_type_args` for two `Bar` parameters. |
+| `expand` (0.2.4) | A package-private constructor in another package resolves to ⊥ with reason `inaccessible` and resolves from its own package; `T`, an off-index type, a JDK type, and a private-only type yield `generic_erased`, `offindex`, `jdk_no_recipe`, `no_path`; `expand_past=2` and `=4` produce nested entity, file, and related-test sets, identical traces on repetition, and a first step that is an unused alternative recipe. |
+| `packet` (0.2.4) | `final_status` is `sufficient` on the default packet, `budget-limited` when the budget drops section 4 under a non-literal state oracle, `sufficient-with-gaps` with a gap count, `fallback` on a fallback expansion; section 7 renders for a continuation run. |
+| `cli` / `db` / `metrics` (0.2.4) | S1 carries `semantic_gaps`, S2 carries `unresolved_reasons` and `extended_by`, S3 and `results` carry `packet_status`; `--expand-past 2` is a distinct configuration whose S2 checkpoint shows the extension; `init_schema` adds `packet_status` to older ledgers; `report` prints outcomes by packet status. |
 
 ---
 

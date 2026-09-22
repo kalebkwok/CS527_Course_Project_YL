@@ -18,7 +18,7 @@ from typing import Optional
 
 from . import proximal, trigger
 from .demand import Task  # noqa: F401  (re-exported type for callers)
-from .index import Index, erase, simple
+from .index import Index, erase, is_jdk, is_literal, simple
 
 _ENCODER = object  # sentinel: not yet attempted
 
@@ -39,6 +39,33 @@ class Packet:
     text: str
     est_tokens: int
     sections: dict = field(default_factory=dict)
+    dropped: list = field(default_factory=list)  # section keys removed by the budget (§2.6)
+    over_budget: bool = False  # protected sections alone exceed the budget (§2.4 final-packet invariant)
+
+
+def final_status(demands, expansion, packet: "Packet", gaps: Optional[dict] = None) -> str:
+    """§2.4 final-packet invariant: Σ is only claimed for evidence the model actually receives.
+
+    fallback           Σ failed structurally (§2.5)
+    budget-limited     Σ held over ctx, but the rendered packet lost oracle evidence (section 4 dropped
+                       while a non-literal return/state oracle needed an observable) or the protected
+                       sections alone exceed the token budget
+    sufficient-with-gaps  Σ holds on the rendered packet but S1 recorded semantic gaps (§2.4.1)
+    sufficient         Σ holds on the rendered packet and no semantic gap was detected
+    """
+    if expansion.status == "fallback":
+        return "fallback"
+    if SECTION_KEYS[3] in packet.dropped:
+        for n in demands:
+            if n.kind == "oracle" and n.detail in ("return", "state"):
+                tau = erase(n.type)
+                if not (is_literal(tau) or is_jdk(tau)):
+                    return "budget-limited"
+    if packet.over_budget:
+        return "budget-limited"
+    if gaps and gaps.get("total", 0) > 0:
+        return "sufficient-with-gaps"
+    return "sufficient"
 
 
 def est_tokens(text: str) -> int:
@@ -237,11 +264,12 @@ def render(index: Index, task: Task, demands, expansion, focal_source: Optional[
         ),
         SECTION_KEYS[5]: _assertion_style(index, task, demands),
     }
-    if expansion.status == "fallback":
+    if expansion.referable_tests:  # fallback (§2.5) or continuation past Σ (§2.5 rule step 3)
         sections[SECTION_KEYS[6]] = _related_section(index, task, demands, expansion)
 
     kept = dict(sections)
     droppable = [k for k in SECTION_KEYS if k not in NEVER_DROP][::-1]  # drop from the tail: 7, 6, 4
+    dropped: list[str] = []
 
     def joined(parts: dict) -> str:
         return "\n\n".join(f"{k}\n{parts[k]}" for k in SECTION_KEYS if k in parts and parts[k].strip())
@@ -249,10 +277,13 @@ def render(index: Index, task: Task, demands, expansion, focal_source: Optional[
     for key in droppable:
         if est_tokens(joined(kept)) <= budget_tokens:
             break
-        if key in kept:
+        if key in kept and kept[key].strip():
             del kept[key]
+            dropped.append(key)
     text = joined(kept)
-    return Packet(text=text, est_tokens=est_tokens(text), sections={k: v for k, v in kept.items()})
+    n_tokens = est_tokens(text)
+    return Packet(text=text, est_tokens=n_tokens, sections={k: v for k, v in kept.items()},
+                  dropped=dropped, over_budget=n_tokens > budget_tokens)
 
 
 def simple_pkg(fqn: str) -> str:
