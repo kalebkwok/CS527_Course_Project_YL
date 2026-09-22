@@ -1,0 +1,51 @@
+% DemandTest — one-page project summary (CS527, Fall 2026). Compile with pdflatex + bibtex, or upload to Overleaf.
+\documentclass[10pt]{article}
+\usepackage[letterpaper,margin=0.55in,top=0.45in,bottom=0.45in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{newtxtext,newtxmath}
+\usepackage{microtype}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\usepackage{xspace}
+\usepackage{multicol}
+\titleformat{\section}{\normalfont\bfseries\large}{}{0pt}{}
+\titlespacing*{\section}{0pt}{5pt}{1.5pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{3pt}
+\setlength{\bibsep}{0pt}
+\newcommand{\tool}{\textsc{DemandTest}\xspace}
+\newcommand{\suff}{\ensuremath{\Sigma}\xspace}
+\pagestyle{empty}
+
+\begin{document}
+\fontsize{9.6pt}{11.3pt}\selectfont
+
+\begin{center}
+  {\LARGE\bfseries \tool: Demand-Driven Static Discovery of Project-Specific Knowledge\\[2pt] for Efficient Intention-Aligned Unit Test Generation}\\[5pt]
+  {\large Yunqi Li \quad Jinjie Guo}\\[1pt]
+  {\small University of Illinois Urbana-Champaign \quad
+   \href{mailto:yunqili4@illinois.edu}{yunqili4@illinois.edu} \quad
+   \href{mailto:jinjieg2@illinois.edu}{jinjieg2@illinois.edu}}\\[1pt]
+  {\small CS527 project summary, September 2026}
+\end{center}
+
+\section*{Target problem and motivation}
+Given a focal method, a large Java codebase, and a natural-language \emph{validation intention}, the task is to generate a unit test that compiles, runs, and validates that intention, with a locally hosted model and at a fraction of an agent's cost. Industrial tests validate requirements, not coverage~\cite{qi2025intentiontest}, and writing one needs project-specific knowledge: which factory builds a valid input, which fixtures and mocks the project uses, what is observable for the assertion. Repository agents such as OpenHands~\cite{wang2025openhands} find that knowledge by reading files one at a time. Context-injection generators such as KTester~\cite{li2026ktester} and CATGen~\cite{chen2026catgen} inject fixed patterns with no criterion for when enough has been collected. A 2026 review of 116 studies~\cite{zhang2026slr} lists two project-level systems and no efficiency metric within its window. The setting is ICSE~2027 Industry Challenge~8~\cite{icse27challenge8}, whose requirements are intention alignment, scalability, at least 50\% fewer tokens and 20\% less time than an agent at comparable quality, private-model deployability, and evaluation on compile rate, pass rate, alignment, cost, time, and files inspected.
+
+\section*{Plan for approach design}
+Thesis: the knowledge a test needs is largely determined by types and the intention, so compute it before any model call. \textbf{S0} indexes the project once with JavaParser~\cite{javaparser}: constructors, factories, builders, singletons, observables, fields read, and every existing test's fixtures and callees. \textbf{S1} derives a typed \emph{demand set}: receiver, one need per argument bound to its precondition sentence, setup needs, oracle needs from the expected results under one cue rule with negation handling, and the test idiom; what it cannot bind is recorded as semantic-gap flags. \textbf{S2} resolves each need to the cheapest accessible construction recipe, expands only along unresolved needs, and stops when a \emph{structural} context-sufficiency predicate \suff holds; otherwise it falls back to the two existing tests with the largest demand overlap, a static analog of TestTailor's path-proximal tests~\cite{zhou2026testtailor}, each shown with its demand diff. \textbf{S3} renders one packet, with trigger hints for oracles in the spirit of exLong~\cite{zhang2025exlong}, and makes one call to an open-weight model. \textbf{S4} repairs statically, compiles, and runs. \textbf{S5} makes at most one repair call. \suff is claimed only for evidence that survives rendering, so every run carries a status: \emph{sufficient}, \emph{sufficient-with-gaps}, \emph{budget-limited}, or \emph{fallback}. The research question is whether typed obligations decide \emph{which} context to retrieve and \emph{when to stop} better than similarity ranking or fixed expansion at the same allowance; static analysis, compact context, and few calls are shared with prior work~\cite{li2026ktester,chen2026catgen,ferrer2026context} and are not claimed.
+
+\section*{Plan for evaluation design}
+Subjects: the 13 Java projects of IntentionTest's benchmark~\cite{qi2025intentiontest}, with intentions reverse-engineered from existing tests as they did, 10\% human-checked, plus 30 intentions written independently from the focal method only. No information derived from the held-out test enters any system; the agent's checkout loses the method and its git history; results are split by whether a close clone test is visible. Primary metric: \emph{aligned success rate} over all tasks, requiring compile, pass, dynamic focal execution via JaCoCo, and the top judge score, with the judge validated against blinded, adjudicated human ratings, since LLM-written oracles tend to encode actual rather than intended behaviour~\cite{konstantinou2024oracles}. Efficiency: tokens, first-use and amortized time, online files, in four accounting buckets shared by every system. Baselines: OpenHands at 10, 30, and 60 iterations, a simplified IntentionTest reimplementation, and a compact static-context baseline sharing the generator. Two controlled experiments: \emph{selection}, varying only the selector over one candidate pool at fixed allowances; and \emph{stopping}, varying only the stopping policy over nested packets. Mutation score with PIT~\cite{coles2016pit} on a subset. Non-inferiority is predefined at five points with sensitivity at three and two. A 150-task pilot across three contrasting projects decides \emph{proceed}, \emph{redesign}, or \emph{inconclusive} before the full evaluation.
+
+\section*{Expected outcome}
+A Pareto plot of aligned success against tokens with confidence intervals, one point per configuration and agent budget, and a per-system table with index and online costs separated. Expected: comparable aligned success below half the agent's tokens and 80\% of its time, with the largest gap on online files inspected. Expected and reported failure modes: \suff holds while the call fails, attributed by manual analysis to premature stops or generation errors; intentions with relational or state preconditions the static analysis cannot bind; large repositories that do not build. Deliverables: the generator, a reusable ledger harness any generator can write to, the reproduced benchmark, and a poster. Not claimed: bug finding, fine-tuning, industrial evaluation, which is proxied and stated as a limitation.
+
+{\scriptsize
+\begin{multicols}{2}
+\bibliographystyle{plainnat}
+\bibliography{refs}
+\end{multicols}
+}
+\end{document}
