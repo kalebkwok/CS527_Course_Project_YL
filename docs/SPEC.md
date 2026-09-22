@@ -1,6 +1,6 @@
 # DemandTest — Design and Implementation Specification
 
-Version 0.2.2 (2026-09-22; 0.2.1 was 2026-09-14). Status: S0–S5 implemented against this spec (§12 indexer row green
+Version 0.2.3 (2026-09-22; 0.2.2 same day, 0.2.1 was 2026-09-14). Status: S0–S5 implemented against this spec (§12 indexer row green
 on the 3-file sample; first real index: cron-utils `bac6e86`); baselines/eval pending. Owner: Kaleb Guo.
 Audience: whoever (human or model) implements the code. Nothing in this repo
 is implemented yet; this document is the contract. Sections marked **MUST**
@@ -30,6 +30,19 @@ hints and related tests carry a demand diff; §2.8.5 static `target_hit`; §2.9 
 §6 `target_hit` column with migration; §7 `--repeat`; §11 aligned-given-pass, LLM-call success
 rate, budget curve, variance protocol; §12 new rows. No change to Σ, to the prompts, or to the
 "0 LLM calls before S3" property.
+
+**0.2.3 changes** (after external review, 2026-09-22; documentation only, no code change):
+Σ is renamed the *structural* context-sufficiency predicate and §2.4 now states what it checks,
+what it does not, the supported intention forms, the evidence for each need, the recipe
+objective, the boundary to semantic uncertainty, and the index scope with unresolved-reason
+accounting. §9 states the leakage rule precisely (no information derived from the held-out test
+enters the accessible index or context; baseline checkouts lose the method and the git history)
+and adds the clone-available split and independently written intentions. §11 makes aligned
+success rate over all tasks the primary metric, requires dynamic evidence that the focal method
+executed, splits accounting into index / online / generation / execution with first-use and
+amortized time, adds budget sweeps and a compact-static-context baseline, redesigns RQ5 as a
+same-task stopped-vs-extended comparison, and predefines a non-inferiority margin. The pilot
+that decides whether the full evaluation is worth running is in `docs/PILOT.md`.
 
 ---
 
@@ -95,6 +108,9 @@ Oracle rules (regex over `I.expected_results`, case-insensitive):
 
 Needs are de-duplicated by `(kind, tau, detail)`, order preserved.
 
+Supported intention forms, relations between needs, and the semantic-gap flags that S1 records
+when it cannot bind part of an intention are defined in §2.4.1.
+
 ### 2.3 Recipes
 
 A **recipe** produces a value of type `tau`:
@@ -122,7 +138,17 @@ resolve recursively with `depth < d_max` (default 3); memoized on
 `(erase(tau), depth)`; cycle-guarded (a type currently being resolved
 resolves to ⊥). `erase` strips generics and array brackets (OPEN 1).
 
-### 2.4 Sufficiency predicate `Σ(D, ctx)` (S2, no LLM)
+### 2.4 Structural context-sufficiency predicate `Σ(D, ctx)` (S2, no LLM)
+
+**What Σ checks, and what it does not.** Σ is a *structural* predicate. It holds when every
+value the test must construct has a construction path whose entities are in the context, every
+oracle need has an observable (or a mock is admissible), and the idiom is known. It does **not**
+establish that the context suffices to write a *semantically aligned* test: it does not know the
+relation between two arguments an intention constrains jointly ("amount exceeds the balance"),
+the receiver state a scenario requires before the call, or which observable distinguishes the
+intended outcome from an unrelated failure. Those are *semantic gaps*. §2.4.4 says how they are
+recorded and measured; they are never claimed to be resolved. In the paper and in this document
+Σ is "structural context sufficiency", never "sufficiency".
 
 `ctx` is the current context: a set of visible type FQNs, a list of entities
 (methods/fields/fixtures) whose signatures the packet may show, the set of
@@ -130,7 +156,7 @@ files those entities live in, and a map `need → recipe`.
 
 ```
 Σ(D, ctx) ⇔ ∀ n ∈ D:
-  n = Receiver|Arg|Setup      ⇒ ctx.recipes[n] defined (all sub-recipes' entities ∈ ctx)
+  n = Receiver|Arg|Setup      ⇒ ctx.recipes[n] defined ∧ no leaf of it is ⊥ ∧ entities(recipe) ⊆ ctx.entities
   n = Oracle(return, tau)     ⇒ tau is JDK/primitive ∨ ∃ observable o of tau in ctx.entities
   n = Oracle(exception, tau)  ⇒ tau is JDK ∨ tau ∈ ctx.types
   n = Oracle(state, C)        ⇒ ∃ observable o of C in ctx.entities
@@ -139,6 +165,69 @@ files those entities live in, and a map `need → recipe`.
 ```
 
 `Σ` is computed from the index only. It MUST NOT call the LLM.
+
+#### 2.4.1 Supported intention forms (S1 input contract)
+
+| Intention content | What S1 derives | Bound by Σ? |
+|---|---|---|
+| Objective only | Receiver, Arg (unconstrained), Setup, one oracle need from the objective's cues; with no cue: `return` if `m` is non-void, else `state` | yes (structurally) |
+| Precondition sentence naming one parameter (by name, or by simple type name when unique among the parameters) | `Arg.constraint = sentence` | no: rendered verbatim on the arg line |
+| Precondition sentence naming two or more parameters | `Relation(i, j, sentence)` | no: rendered verbatim; flag `relational` |
+| Precondition describing receiver or collaborator state ("the account has balance 100") | `StateHint(sentence)` | no: rendered verbatim; flag `state` |
+| Expected results with an exception / return / state / interaction cue (§2.2 table) | one oracle need per cue | existence only (see §2.4.2) |
+| Sentences S1 cannot bind to any parameter, field, or cue | nothing | flag `unbound` |
+| References to entities outside the signature and class (other classes, resource files, environment) | nothing | flag `unbound` |
+
+Nothing is dropped: the intention is always rendered verbatim in packet section 1, so the model
+sees what Σ could not bind. Two or more parameters sharing one non-literal type set flag
+`same_type_args` (the recipe is the same; telling the values apart is left to the model).
+
+#### 2.4.2 Demand representation and evidence of satisfaction
+
+`Need = (kind, tau, detail, constraint, relations)`. Evidence that a need is satisfied:
+
+- **Receiver / Arg / Setup(tau)**: a recipe `r` with `entities(r) ⊆ ctx.entities` and every leaf
+  resolved (a leaf is a Literal, Fixture, Singleton, Mock, or a parameterless Ctor/Factory/Helper).
+  A literal `tau` is its own evidence.
+- **Oracle(return, tau)**: `tau` literal or JDK, or an observable of `tau` in `ctx.entities`.
+  Existence of *an* observable, not the right one.
+- **Oracle(exception, tau)**: `tau` JDK, or `tau ∈ ctx.types`. Only visibility of the type;
+  nothing about *reaching* the throw is checked. Trigger hints (§2.6) are advisory.
+- **Oracle(state, C)**: an observable of `C` in `ctx.entities`. Existence, not the right one.
+- **Oracle(interaction, tau)**: `mocking_lib ≠ none`. Admissibility, not injectability of `tau`.
+- **Idiom**: `project.test_framework` known.
+
+#### 2.4.3 Recipe-selection objective and incompatible recipes
+
+- Objective: minimize `cost(r)` = number of non-literal parameters summed transitively over the
+  chosen sub-recipes (§2.3); ties by project-usage order `Fixture < Helper < Ctor < Factory <
+  Builder < Singleton < Mock < SubtypeCtor`, then by rendered text for determinism.
+- A recipe is **incompatible** when any sub-recipe resolves to ⊥ (cycle, depth cap `d_max`, or no
+  construction path). It is discarded whole; a partially resolved recipe never enters `ctx`.
+- Mock is admissible only for interface/abstract `tau` and only if the project already mocks.
+- The alternatives considered for each need are logged in the trace (`alternatives=[...]`) so the
+  tie-break ablation (§11) can be run from the ledger without re-resolving.
+
+#### 2.4.4 Boundary: structural completeness vs semantic uncertainty
+
+Σ = structural completeness. The S1 checkpoint records `semantic_gaps = {relational, state,
+unbound, same_type_args}` with counts. A run is reported as `sufficient` (Σ holds, all counts 0),
+`sufficient-with-gaps` (Σ holds, some count > 0), or `fallback`. RQ5 (§11) stratifies by these
+three statuses and by the manual missing-fact analysis; a `sufficient-with-gaps` run that fails
+is not evidence against Σ, and a `sufficient` run that fails is.
+
+#### 2.4.5 Index scope (S0) and unresolved-reason accounting
+
+Supported construction paths: public and package-private constructors; static factories returning
+`tau` or a subtype; builders; static fields including enum constants; subtype constructors for
+interface/abstract `tau`; fixture fields and helper methods in existing tests; Mockito-style mocks.
+Not supported, and recorded per unresolvable need as `unresolved_reason ∈ {no_path, cycle,
+depth, di_constructed, reflection, resource_file, inherited_factory_offindex, generic_erased}`:
+types constructed by a DI container (no constructor path in the index), reflection-created types,
+types needing resource files, factories inherited from types outside the index classpath, and
+generic type arguments (erased, OPEN 1). §11 reports the distribution of reasons; JavaParser with
+the symbol solver is the starting point, not a complete resolver, and this table is the measured
+boundary.
 
 ### 2.5 Bounded expansion (S2)
 
@@ -590,24 +679,44 @@ Use natural language; do not quote code (fewer than 5% of tokens may be identifi
 
 ## 9. Task construction
 
-`scripts/make_intentions.py --repo --index --model --out tasks.jsonl`:
+`scripts/make_intentions.py --repo --index --model --out tasks.jsonl` reproduces IntentionTest's
+benchmark construction (their §5.1.1) faithfully:
 
 1. For each `TestInfo` with **exactly one** callee into the source roots
    whose owner is a non-test type: that callee is the focal method.
 2. Drop focal methods that are trivial (getters/setters, ≤ 3 LOC), abstract,
    or private.
-3. Ask the LLM (prompt §8.3) once per test; reject outputs violating the
-   length or code-token constraints and re-ask at most once.
+3. Ask the LLM (prompt §8.3) to **reverse-engineer** the intention from the existing test, once
+   per test; reject outputs violating the length or code-token constraints and re-ask until they
+   hold (cap 3, then drop and count).
 4. Write one task line per test; `ref_test_id` = the test's id.
 5. Sample 10 % for manual review by two people; disagreements refine the
-   rubric; report agreement.
+   rubric; report Cohen's κ. This validates the *intentions*; it does not validate the output
+   judge (§11 has a separate sample for that).
 
-**Leakage control (MUST).** When running a task, `index.exclude_test(ref_test_id)`
-hides the reference test from fixtures, helpers, referable-test retrieval,
-and the idiom example. The generator never sees the answer. The baseline
-agent is run on a checkout where the reference test method has been removed
-from its file (a script produces this checkout per task; the file is
-restored afterwards).
+Generating candidate intentions from the focal method first and matching them to tests (as in
+IntentionTest's later tooling) is **not** the benchmark procedure. If used, it is a separate
+dataset with its own filtering statistics (candidates generated, matched, retained, dropped).
+
+**Independently written intentions.** For at least 30 focal methods across the pilot projects,
+two people write intentions from the focal method and its class only, never from the test. These
+are the generalization set beyond reverse-engineered descriptions and are reported separately.
+
+**Leakage control (MUST).** No information derived from the held-out reference test enters any
+system's accessible index or context. Concretely: `index.exclude_test(ref_test_id)` hides the
+test's `TestInfo`, its fixtures, its callees, and its source from every query (fixtures, helpers,
+proximal candidates, idiom example, related tests); no precomputed retrieval feature or summary
+exists in the index, so nothing derived from the test survives exclusion. Class-level fixture
+fields shared with sibling tests in the same class remain visible: they are declared by the class,
+not derived from the held-out method, and neighboring tests are legitimate context for this task.
+The baseline agent runs on a checkout in which the reference test method has been removed from
+its file **and the `.git` directory has been removed**, so the method cannot be recovered from
+history; the file is restored afterwards. Equivalent isolation applies to every baseline.
+
+**Clone-available split (MUST report).** Per task, `clone_available = 1` when a visible sibling
+test calls the same focal signature, or the best visible demand-proximal score (§2.5.1) is ≥ 0.8.
+All quality metrics are reported for the clone-available and clone-free strata separately, so
+that aggregate performance cannot be explained by adapting near-identical tests.
 
 ---
 
@@ -650,37 +759,89 @@ repositories with > 10,000 source files (candidates: Elasticsearch, Apache
 Flink, Spring Framework; decide after `scripts/count_source_files.sh` and a
 build attempt). No industrial repository is available; stated as a threat.
 
-Metrics per task (from the ledger): `compiled`, `passed`, `n_asserts`,
-`mutation_score` (PIT on a sampled subset, restricted to the focal class),
-`alignment_score` (LLM-judge with a 0–2 rubric — does the test's assertion
-check the expected result? — calibrated on the human 10 % sample; report
-Cohen's κ), tokens, calls, `wall_ms`, `inspected_files`, cost per passing
-test (provider price × tokens).
+**Primary metric.** *Aligned success rate* over **all attempted tasks**:
 
-Added in 0.2.2 (after TestTailor's evaluation):
-- `target_hit` rate and **aligned-given-pass** = mean(passed ∧ target_hit): a passing test
-  that does not call `m` or lacks the oracle the intention asks for is not a success.
-- **LLM-call success rate** = Σ passed / Σ n_llm_calls per system: usable tests per model call.
-- **Budget curve**: cumulative passes against cumulative tokens in task order
-  (`metrics.budget_curve`, printed by `report`); the poster figure next to the Pareto plot.
-  Agent baselines count every call, including tool-call turns (unlike TestTailor's cost
-  table, which excluded CoverUp's tool calls); those turns are the cost R3 asks us to remove.
+```
+aligned_success = (compiled ∧ passed ∧ focal_executed ∧ judge = 2) / attempted tasks
+```
 
-**Variance protocol.** Every configuration runs once over the full task set. Three projects
-(smallest, median, largest by task count) additionally run ten times with `--repeat 1..10`;
-report the maximum standard deviation of pass rate and whether the system ranking is the
-same in every repeat.
+`focal_executed` is **dynamic**: the focal method's lines show non-zero coverage in a JaCoCo run
+of the generated test (a static call reference may be unreachable or mocked; `target_hit` of
+§2.8.5 stays as the cheap static proxy and is reported next to it). `judge = 2` is the top level
+of the 0–2 alignment rubric. Aligned-given-pass is a diagnostic, never the headline: alone it can
+hide a system that is aligned only on a small, easy subset.
+
+**Other metrics per task (from the ledger):** `compiled`, `passed`, `target_hit`,
+`focal_executed`, `n_asserts`, `mutation_score` (PIT restricted to the focal method's lines, on a
+sampled subset; intention-relevant mutants where feasible), `alignment_score` (0–2), tokens
+(provider usage, never estimated), calls, `inspected_files_online`, cost per aligned test,
+`repair_weakened` (after S5: assertions fewer, oracle evidence lost, or `target_hit` dropped;
+strict variant counts such runs as failures), and `semantic_gaps` / `unresolved_reason` (§2.4).
+
+**Accounting (MUST).** Report separately, with the same boundaries and cache assumptions for
+every system, and with failed attempts included in every total:
+
+| Bucket | DemandTest | Agent baseline |
+|---|---|---|
+| Index / first use | S0 wall-clock, peak memory, files scanned; once per repo | none (warm checkout only) |
+| Online retrieval | S2 files added to `ctx` (`inspected_files_online`), packet tokens | every file a tool call reads or greps |
+| Generation and repair | S3 + S5 tokens and latency | all LLM turns |
+| Execution | compile and run time | compile and run time |
+| Incremental index update | not implemented in v1; stated | n/a |
+
+Time per task is reported both **first-use** (`index_time + online_time`) and **amortized**
+(`index_time / tasks_on_repo + online_time`). The phrase "opens a file only when a need requires
+it" refers to the online bucket only.
+
+**Baselines (minimum persuasive set).**
+1. OpenHands headless, same model, at **three iteration budgets** (10 / 30 / 60), after checking
+   that the chosen open-weight model drives its tools competently on five tasks.
+2. IntentionTest: a faithful reimplementation on the harness, clearly labeled as such.
+3. **Compact static context (CSC)**: focal method plus the signatures of directly referenced
+   types and the class's fields, cut to the same `B_t`, with the *same* generator and repair
+   policy. This isolates "signatures and few calls" from "typed demands".
+4. DemandTest ablations, same generator and repair: `−I` (demands from types only, intention text
+   still in the packet); `fixed` (expansion to `B_f`, `B_t` without the stopping rule);
+   `embed` (embedding retrieval at the same budget); tie-break swapped; trigger `returns:` hint
+   off (implementation-leakage check).
+
+**Research questions.**
+- RQ1 quality: aligned success rate of DemandTest vs each baseline, per project and pooled.
+  *Comparable quality* is predefined as **non-inferiority within 5 points absolute** of
+  OpenHands-30, with 95 % bootstrap confidence intervals over tasks; a non-significant difference
+  is not parity.
+- RQ2 efficiency: tokens, first-use and amortized time, online files, vs the R3 thresholds, at
+  every agent budget.
+- RQ3 mechanism: DemandTest vs CSC and vs `fixed` **at the same context budget**. This is the
+  claim that obligations select context better than similarity ranking or fixed expansion.
+- RQ4 sensitivity: model size; objective-only intentions; independently written intentions;
+  clone-available vs clone-free strata.
+- RQ5 stopping rule, **same tasks**: stop at Σ vs continue past Σ by `k` entities
+  (`--expand-past k`, k ∈ {2, 4}) vs full class. Plus a manual missing-fact analysis on 30
+  `sufficient`-but-failed and 30 `fallback` tasks, classifying each as premature stop, binding
+  failure, generation failure with adequate context, or repair failure. Comparing `sufficient`
+  against `fallback` tasks alone is not evidence of predicate accuracy.
+
+**Statistics.** Paired comparisons at task level; bootstrap confidence intervals clustered by
+project; per-project tables; the Pareto figure shows every agent budget and DemandTest
+configuration with interval bars, not one point per system.
+
+**Human evaluation.** Two separate samples: (a) intention validation (§9, 10 %, κ reported);
+(b) judge validation: blinded ratings of generated tests drawn across systems and projects,
+100 tests stratified by system, two raters, κ reported, and the judge's agreement with the human
+majority reported before the judge's numbers are used.
+
+**Variance protocol.** Every configuration runs once over the full task set. Three projects,
+chosen in advance to differ in size and dependency profile (builder-heavy, fixture-heavy,
+interface/mocking-heavy), additionally run ten times with `--repeat 1..10`; report the maximum
+standard deviation of aligned success and whether the system ranking holds in every repeat.
 
 **Repair-cap pilot.** On the pilot projects run `--refine 2` and report the marginal
-aligned-pass gain of the second round against its extra tokens. The cap of §2.9 stays at 1
+aligned-success gain of the second round against its extra tokens. The cap of §2.9 stays at 1
 unless the second round adds ≥ 2 points for ≤ 10 % extra tokens.
 
-RQ1 quality parity with the agent baseline; RQ2 efficiency deltas vs. the
-R3 thresholds (≥ 50 % tokens, ≥ 20 % wall-clock) plus inspected files;
-RQ3 ablations (packet vs. full-class context vs. embedding retrieval; static
-repair vs. LLM repair; `B_files`, `B_tokens`, `d_max`); RQ4 sensitivity to
-model size and to objective-only intentions; RQ5 predicate accuracy — when
-`status = sufficient`, how often S3 passes without S5, vs. `fallback`.
+**Go/no-go.** The pilot in `docs/PILOT.md` runs before the full evaluation and decides whether it
+is worth running.
 
 ---
 
@@ -734,3 +895,9 @@ independently. Weekly sync; every number in a table must be reproducible by
 5. May S2 consult the intention text for recipe choice (e.g., "empty list" → `List.of()`)? Cheap; decide after the first ablation.
 6. Index size on Elasticsearch-class repos: streaming writer + lazy loader, or shard by package?
 7. Whether to count the focal file itself in `inspected_files` (currently yes, for every system).
+8. Which observable is the *right* one for a state oracle: Σ checks existence only (§2.4.2); a
+   ranking by name similarity to the expected-results sentence is a candidate refinement.
+9. Relational preconditions (§2.4.1): whether a small typed constraint language (`amount > balance`)
+   over parameters and observables is worth adding, or whether the verbatim sentence suffices.
+10. Dynamic `focal_executed` via JaCoCo per generated test: cost per task and whether to restrict
+    the agent to the same instrumentation.

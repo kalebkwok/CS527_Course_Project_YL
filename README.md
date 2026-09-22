@@ -31,6 +31,15 @@ Still to build: `scripts/make_intentions.py` (task construction, §9), the OpenH
 (the trajectory parser exists, the headless launcher does not), and the evaluation harness
 (PIT mutation, LLM-judge alignment, amortized S0 cost reporting).
 
+**0.2.3 (2026-09-22), after external review; documentation only.** Σ is now the *structural*
+context-sufficiency predicate, with its boundary, supported intention forms, evidence rules,
+recipe objective, and index scope written down (SPEC §2.4). Leakage control, the clone-available
+split, and independently written intentions are in §9. §11 makes aligned success rate over all
+tasks the primary metric, requires dynamic focal execution, splits accounting into index / online /
+generation / execution, adds agent budget sweeps and a compact-static-context baseline, and
+redesigns RQ5 as a same-task stopped-vs-extended comparison. The pilot that decides whether the
+full evaluation runs is [`docs/PILOT.md`](docs/PILOT.md).
+
 **0.2.2 (2026-09-22), after TestTailor (Zhou et al., FSE 2026).** Their ablation says the closest
 existing test plus the point where it diverges is the dominant lever, so: the fallback and the
 idiom example now pick existing tests by *demand overlap* (`proximal.py`, SPEC §2.5.1) instead of
