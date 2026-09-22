@@ -5,6 +5,8 @@ TestTailor (Zhou et al., FSE 2026) tells the model not only *what* remains uncov
 oracle, not a path, so the analog is cheap: collect the guards (if / else-if / else / loop
 headers / catch) that enclose each `throw` and `return` of the focal body. Brace and paren
 matching in the spirit of §2.8's regex first cut; the hint is advisory and never affects Σ.
+Prior art for guard conditions behind exception tests: exLong (Zhang, Liu, Nie, Li, Gligoric;
+ICSE 2025, arXiv:2405.14619), which derives them from execution traces and a fine-tuned model.
 """
 from __future__ import annotations
 
