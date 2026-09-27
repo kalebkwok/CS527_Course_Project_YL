@@ -1,0 +1,74 @@
+\documentclass[sigconf,nonacm]{acmart}
+% CS527 one-page project proposal (Group 5), Fall 2026.
+% Compile from paper/: tectonic proposal-onepage.tex   (or latexmk -pdf; shares acmart.cls, the .bst, and proposal.bib)
+\settopmatter{printacmref=false,printfolios=false}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\pagestyle{empty}
+
+\usepackage{xspace}
+\usepackage{enumitem}
+\newcommand{\tool}{\textsc{DemandTest}\xspace}
+\newcommand{\suff}{\ensuremath{\Sigma}\xspace}
+\setlist{nosep,leftmargin=*}
+\setlength{\emergencystretch}{1.5em}
+
+\begin{document}
+
+\title{\tool: Demand-Driven Static Discovery of Project-Specific Knowledge for Efficient Intention-Aligned Unit Test Generation}
+\subtitle{CS 527 Project Proposal (Group 5)}
+
+\author{Yunqi Li (NetID: yunqili4), Jinjie Guo (NetID: jinjieg2)}
+\affiliation{%
+  \institution{University of Illinois Urbana-Champaign}
+  \country{}}
+\email{\{yunqili4,jinjieg2\}@illinois.edu}
+
+\begin{abstract}
+Writing a unit test for a real project requires project-specific knowledge, and repository agents find it by reading files one at a time, at a high cost. \tool instead computes what a test needs from the focal method's types and the test intention, fetches only that knowledge from a static project index, stops once every need is covered, and then calls a local model once.
+\end{abstract}
+
+\keywords{Unit Test Generation, Large Language Model, Static Analysis}
+
+\maketitle
+
+\section{Target Problem and Motivation}
+\textbf{Task.} Given a focal method in a large Java codebase and a natural-language \emph{validation intention}, generate a unit test that compiles, runs, and checks that intention~\cite{qi2025intentiontest}. This is Challenge~8 of the ICSE~2027 Industry Challenge Track~\cite{icse27challenge8}.
+
+\textbf{Why it is hard.} The test needs knowledge that is spread across many files: how to build valid inputs, which fixtures and mocks to use, and what to assert.
+
+\textbf{Why current tools fall short.} Agents such as OpenHands~\cite{wang2025openhands} read files one by one, so tokens, time, and files inspected all grow with the search. Context-injection tools such as KTester~\cite{li2026ktester} and CATGen~\cite{chen2026catgen} add fixed patterns of context, with no rule for when enough has been collected.
+
+\textbf{Goal.} Comparable quality with at least 50\% fewer tokens and 20\% less time than an agent, on a private model.
+
+\section{Plan for Approach Design}
+\textbf{Key idea.} What a test needs is largely determined by types and by the intention, so we compute it statically, \emph{before} any model call:
+\begin{itemize}[leftmargin=2em,labelsep=0.5em]
+  \item[\textbf{S0}] \textbf{Index once.} JavaParser records constructors, factories, builders, and the fixtures of existing tests.
+  \item[\textbf{S1}] \textbf{List the needs.} A typed \emph{demand set}: receiver, valid inputs with their preconditions, setup, and what to assert. Needs that cannot be resolved are flagged as gaps.
+  \item[\textbf{S2}] \textbf{Resolve, then stop.} Map each need to its cheapest construction recipe and expand only along unresolved needs. Stop when the sufficiency rule \suff holds (every need has a recipe); otherwise fall back to the two closest existing tests~\cite{zhou2026testtailor}.
+  \item[\textbf{S3}] \textbf{Generate.} One compact prompt, one call to a local open-weight model.
+  \item[\textbf{S4}] \textbf{Check.} Static fixes, then compile and run.
+  \item[\textbf{S5}] \textbf{Repair.} At most one repair call.
+\end{itemize}
+\textbf{Research question.} Do typed needs pick \emph{which} context to fetch and \emph{when to stop} better than similarity ranking?
+
+\section{Plan for Evaluation Design}
+\begin{itemize}
+  \item \textbf{Subjects.} The 13 Java projects of the IntentionTest benchmark~\cite{qi2025intentiontest}, plus 30 new intentions; the held-out test is hidden from all systems.
+  \item \textbf{Metrics.} \emph{Aligned success rate}: the test compiles, passes, runs the focal method, and a human-validated judge confirms it checks the intention. Cost: tokens, time, and files inspected.
+  \item \textbf{Baselines.} Main: \emph{vanilla} OpenHands (default agent, prompts, tools, and iteration limit; same model, only our task prompt). Also: OpenHands capped at 10, 30, and 60 iterations; a simplified IntentionTest; a static-context baseline.
+  \item \textbf{Ablations.} Vary only context selection, or only the stopping rule.
+  \item \textbf{Pilot.} 150 tasks on three projects decide whether to proceed.
+\end{itemize}
+
+\section{Expected Outcome}
+\begin{itemize}
+  \item \textbf{Main result.} Aligned success within 5 points of vanilla OpenHands at less than 50\% of its tokens and 80\% of its time, shown as a plot of success versus tokens, with the capped runs as extra points.
+  \item \textbf{Deliverables.} The generator, a reusable cost-accounting harness, the reproduced benchmark, and a poster.
+  \item \textbf{Risks.} \suff holds but the test still fails; preconditions that static analysis cannot capture; projects that do not build.
+\end{itemize}
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{proposal}
+
+\end{document}
