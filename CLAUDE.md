@@ -75,5 +75,6 @@ toward the paper's claim.
 6. Evaluation: PIT mutation score, LLM judge with human κ, dynamic check that the focal method ran.
 7. Full evaluation (Qwen3.6-27B and Devstral Small 2), OpenHands sanity subset, writing, submission.
 
-Open: author order; faculty advisor; IntentionTest has 12 projects in arXiv v4 but our texts say 13.
+Open: author order; faculty advisor. IntentionTest (ISSTA 2026) has 12 projects, not the 13 in the
+submitted proposal; use 12. Indexer and Maven need `JAVA_HOME=/opt/homebrew/opt/openjdk@17` on this machine.
 Not now: MCP wrapper, SWE-agent and IntentionTest-style baselines, Gradle support.

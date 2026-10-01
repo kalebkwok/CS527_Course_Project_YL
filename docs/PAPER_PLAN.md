@@ -96,7 +96,7 @@ remaining 80 are replayed.
 | Static context for LLM test generation | KTester, CATGen, CAT, TestTailor, HITS, RATester | A decidable stop rule instead of a fixed context pattern |
 | Program-analysis tools for agents | AutoCodeRover, CodexGraph, RepoGraph, LocAgent, PatchAgent, TestAgent (arXiv 2607.09101), LSP token study (arXiv 2608.13568) | Demand-level answers and a stop signal, not symbol lookups |
 | Agent efficiency and stopping | SWE-Pruner, FastContext, Agent Retrieval Bench, SCATE | Deterministic stopping derived from the task, not learned or self-assessed |
-| Same task | IntentionTest (arXiv 2507.20619) | Agent setting and cost accounting |
+| Same task | IntentionTest (ISSTA 2026, arXiv 2507.20619): 12 Java projects, 3,680 tests | Agent setting and cost accounting; same task and benchmark at the same venue |
 | Pipelines versus agents | Agentless | The same question for test generation (RQ5) |
 
 TestAgent decides sufficiency by asking the LLM, asks explicitly after 30 turns and forces
@@ -133,8 +133,8 @@ Open:
 1. Author order; agree now.
 2. Faculty advisor or co-author. Ask the course instructor or another faculty member; also ask about
    university compute (NCSA Delta, NSF ACCESS).
-3. IntentionTest's project count: the arXiv v4 paper says 12 projects and 3,680 tests; the proposal and
-   README say 13. Check the artifact and correct the text before writing.
+3. IntentionTest (ISSTA 2026) has 12 projects and 3,680 tests; the submitted course proposal says 13.
+   Use 12 in the paper.
 
 ## 10. Timeline
 
