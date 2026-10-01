@@ -19,7 +19,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
-from . import db, demand, execute, expand, generate, index as index_mod, metrics, packet as packet_mod, repair, refine
+from . import db, demand, execute, expand, generate, index as index_mod, metrics, packet as packet_mod, repair, refine, replay
 from .demand import Task
 from .llm import DryRunClient, LLMClient
 
@@ -79,6 +79,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("report", help="print summarize() and pareto() as markdown")
     s.add_argument("--db", required=True)
+
+    s = sub.add_parser("replay", help="Gate 1: evaluate Σ after every step of recorded agent trajectories")
+    s.add_argument("--index", required=True)
+    s.add_argument("--tasks", required=True, help="tasks.jsonl")
+    s.add_argument("--traj-dir", required=True,
+                   help="mini-swe-agent trajectories named <slug>.traj.json or <slug>/<slug>.traj.json")
+    s.add_argument("--repo-root", default=None,
+                   help="repository root in the agent's environment (default: the trajectory's environment cwd)")
+    s.add_argument("--given-focal", action="store_true",
+                   help="count the focal file as read before the first call (the task prompt included it)")
+    s.add_argument("--with-grep-hits", action="store_true", help="sensitivity analysis: grep hits count as reads")
+    s.add_argument("--out", default=None, help="one JSON line per task (default: stdout)")
     return p
 
 
@@ -307,6 +319,7 @@ COMMANDS = {
     "import-tasks": cmd_import_tasks,
     "run": cmd_run,
     "report": cmd_report,
+    "replay": replay.cmd,
 }
 
 

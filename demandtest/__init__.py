@@ -3,4 +3,4 @@
 Python package implementing S1–S5 of docs/SPEC.md.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.5"

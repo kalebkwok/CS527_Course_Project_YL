@@ -1,0 +1,75 @@
+# mini-swe-agent 2.4.6 configuration for the vanilla baseline (docs/PAPER_PLAN.md arm A).
+# run.py hashes this file into each run's config, so any edit here is a new configuration in the ledger.
+# Template variables: focal_class, focal_sig, focal_file, test_dir, test_package, objective,
+# preconditions, expected_results (from run.py) and cwd (from the environment).
+agent:
+  system_template: |
+    You are a helpful assistant that can interact with a computer shell to solve programming tasks.
+  instance_template: |
+    <task>
+    Write a JUnit test for `{{focal_class}}#{{focal_sig}}` that validates the validation intention below, compiles, and passes. Run it to confirm.
+
+    Validation intention:
+    - Objective: {{objective}}
+    - Preconditions: {{preconditions}}
+    - Expected results: {{expected_results}}
+
+    The focal class is in `{{focal_file}}`. Create one new test class in `{{test_dir}}` (package `{{test_package}}`). Do not modify any existing file.
+    </task>
+
+    <instructions>
+    You are working in a Java project at {{cwd}}, the working directory for all your commands. It builds with Maven, which runs offline here; run a single test class with `mvn -q test -Dtest=<TestClassName>`.
+
+    For each response:
+    1. Include a THOUGHT section explaining your reasoning and what you are trying to accomplish.
+    2. Provide one or more bash tool calls to execute.
+
+    Rules:
+    - Every response MUST include AT LEAST ONE bash tool call. You can make several tool calls in one response when the commands are independent.
+    - Directory and environment variable changes are not persistent: every action runs in a new subshell. Prefix an action with `cd /path && ...` when needed.
+    - Use non-interactive commands only.
+
+    When the test compiles and passes, finish by issuing `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` as a separate command. After this command you cannot continue working on this task.
+    </instructions>
+  step_limit: 50
+  cost_limit: 0.5
+environment:
+  timeout: 600
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+model:
+  model_kwargs: {}
+  observation_template: |
+    {% if output.exception_info -%}
+    <exception>{{output.exception_info}}</exception>
+    {% endif -%}
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long. Please try a different command that produces less output.
+    If you're looking at a file you can use head, tail or sed to view a smaller number of lines selectively.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    {% if finish_reason is defined and finish_reason in ["length"] -%}
+    Your previous response reached the output token limit before you produced a complete action. Respond more concisely and include at least one bash tool call.
+    {%- else -%}
+    Format error: {{error}}
+    Every response must include at least one bash tool call. To finish, run `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` as a separate command.
+    {%- endif %}
